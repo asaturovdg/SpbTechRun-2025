@@ -1,95 +1,94 @@
-{
-    "1000932757": {
+[
+   
+    {
         "id": "1000932757",
+        "int_id": 1001,
         "name": "ровнитель для внутр.работ VETONIT 3000", 
         "category_name": "Смеси для выравнивания полов цементные", 
         "price": 666.00,
         "picture_url": "https://www.maxidom.ru/upload/iblock/3d9/3d9486c4454f194704b568b4cfc7ed98.jpg",
         "white_box_type": "монтаж наливного пола", 
-        "product_role": "основной товар", 
-        
-  
-        "candidates": [
-            {
-                "id": "11997707",
-                "int_id": 101,
-                "category_id": "29165",
-                "name": "контейнер строительный круглый 90л черный", 
-                "vendor": "Нет марки",
-                "price": 651.00,
-                "picture_url": "https://www.maxidom.ru/upload/iblock/73b/73bb11effb1151fa78b9578f1cfe0617.jpg", 
-                "white_box_type": "монтаж наливного пола",
-                "product_role": "сопутка" 
-            },
-            {
-                "id": "4901408",
-                "int_id": 102,
-                "category_id": "25119",
-                "name": "Краскоступы (шипованные подошвы)", 
-                "vendor": "Нет марки",
-                "price": 379.00,
-                "picture_url": "https://www.maxidom.ru/upload/iblock/8d9/8d9c3bbc47a788b20b5169ea866e3a79.jpg",
-                "white_box_type": "монтаж наливного пола",
-                "product_role": "сопутка"
-            },
-            {
-                "id": "9424441",
-                "int_id": 103,
-                "category_id": "25869",
-                "name": "Миксер для смесей 100х500мм", 
-                "vendor": "TOOLBERG",
-                "price": 743.00,
-                "picture_url": "https://www.maxidom.ru/upload/iblock/f85/f8586466b861887a7b259496f4e9c8af.jpg",
-                "white_box_type": "монтаж наливного пола",
-                "product_role": "сопутка"
-            }
-        ]
+        "product_role": "основной товар"               
     },
-
-    "1000938403": {
+  
+    {
         "id": "1000938403",
-        "name": "блок газобетонный ЛСР D400 625х250х100мм", 
-        "category_name": "Газобетонные блоки<", 
-        "price": 125.00,
+        "int_id": 1002,
+        "name": "блок газобетонный ЛСР D400 625х250х100мм",
+        "category_name": "Газобетонные блоки", 
+        "price": 2500.00,
+        "picture_url": "https://www.maxidom.ru/upload/iblock/b3f/b3f69b70228cc0c228dfd540406c0171.jpg",
+        "white_box_type": "Монтаж перегородок ГК и газоблоками",     
+        "product_role": "основной товар"
+    },
+    
+   
+    {
+        "id": "11997707",
+        "int_id": 2001,
+        "category_id": "29165",
+        "name": "контейнер строительный круглый 90л черный", 
+        "vendor": "Нет марки",
+        "price": 651.00,
+        "picture_url": "https://www.maxidom.ru/upload/iblock/73b/73bb11effb1151fa78b9578f1cfe0617.jpg", 
+        "white_box_type": "монтаж наливного пола",
+        "product_role": "сопутка" 
+    },
+    {
+        "id": "4901408",
+        "int_id": 2002,
+        "category_id": "25119",
+        "name": "Краскоступы (шипованные подошвы)", 
+        "vendor": "Нет марки",
+        "price": 379.00,
+        "picture_url": "https://www.maxidom.ru/upload/iblock/8d9/8d9c3bbc47a788b20b5169ea866e3a79.jpg",
+        "white_box_type": "монтаж наливного пола",
+        "product_role": "сопутка"
+    },
+    {
+        "id": "9424441",
+        "int_id": 2003,
+        "category_id": "25869",
+        "name": "Миксер для смесей 100х500мм", 
+        "vendor": "TOOLBERG",
+        "price": 743.00,
+        "picture_url": "https://www.maxidom.ru/upload/iblock/f85/f8586466b861887a7b259496f4e9c8af.jpg",
+        "white_box_type": "монтаж наливного пола",
+        "product_role": "сопутка"
+    },
+    {
+        "id": "1001182240",
+        "int_id": 2004,
+        "category_id": "25500",
+        "name": "насадка на миксер UGO LOKS 60х400х6мм",
+        "vendor": "UGO LOKS",
+        "price": 149.00,
+        "picture_url": "https://www.maxidom.ru/upload/iblock/259/25903aa6554e429b7187f9a3249ebf8c.jpg", 
+        "white_box_type": "Монтаж перегородок ГК и газоблоками",
+        "product_role": "сопутка" 
+    },
+    {
+        "id": "1000966395",
+        "int_id": 2005,
+        "category_id": "30808",
+        "name": "шпатлевка полимерная для внутр.работ VETONIT LR+ финишная ручн. 20кг",
+        "vendor": "VETONIT",
+        "price": 1069.00,
+        "picture_url": "https://www.maxidom.ru/upload/iblock/bc5/bc5606f3b86fcaf760ffa55a41bdc783.jpg",
+        "white_box_type": "Монтаж перегородок ГК и газоблоками",
+        "product_role": "сопутка"
+    },
+    {
+        "id": "9411718",
+        "category_id": "25229", 
+        "int_id": 2006,
+        "name": "Миксер для смесей 100х500мм", 
+        "vendor": "TOOLBERG",
+        "price": 329.00,
         "picture_url": "https://www.maxidom.ru/upload/iblock/b3f/b3f69b70228cc0c228dfd540406c0171.jpg",
         "white_box_type": "Монтаж перегородок ГК и газоблоками",
-        "product_role": "основной товар", 
-        
-    
-        "candidates": [
-            {
-                "id": "1001182240",
-                "int_id": 104,
-                "category_id": "25500",
-                "name": "насадка на миксер UGO LOKS 60х400х6мм",
-                "vendor": "UGO LOKS",
-                "price": 149.00,
-                "picture_url": "https://www.maxidom.ru/upload/iblock/259/25903aa6554e429b7187f9a3249ebf8c.jpg", 
-                "white_box_type": "Монтаж перегородок ГК и газоблоками",
-                "product_role": "сопутка" 
-            },
-            {
-                "id": "1000966395",
-                "int_id": 105,
-                "category_id": "30808",
-                "name": "шпатлевка полимерная для внутр.работ VETONIT LR+ финишная ручн. 20кг",
-                "vendor": "VETONIT",
-                "price": 1069.00,
-                "picture_url": "https://www.maxidom.ru/upload/iblock/bc5/bc5606f3b86fcaf760ffa55a41bdc783.jpg",
-                "white_box_type": "Монтаж перегородок ГК и газоблоками",
-                "product_role": "сопутка"
-            },
-            {
-                "id": "1000938403",
-                "category_id": "25229", 
-                "int_id": 106,
-                "name": "Миксер для смесей 100х500мм", 
-                "vendor": "TOOLBERG",
-                "price": 329.00,
-                "picture_url": "https://www.maxidom.ru/upload/iblock/b3f/b3f69b70228cc0c228dfd540406c0171.jpg",
-                "white_box_type": "Монтаж перегородок ГК и газоблоками",
-                "product_role": "сопутка"
-            }
-        ]
+        "product_role": "сопутка"
     }
-}
+
+    
+]
