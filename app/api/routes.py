@@ -7,6 +7,7 @@ from ..crud import (
     get_product,
     get_recommendations,
     create_feedback,
+    get_products_by_role,
 )
 from ..database import get_session
 from ..models import Recommendation
@@ -60,3 +61,20 @@ async def create_feedback_view(
         is_relevant=payload.is_relevant,
     )
     return feedback
+
+
+@router.get(
+    "/main-products",
+    response_model=List[ProductRead],
+    summary="Получить список основных товаров",
+)
+async def get_main_products_view(
+    db: AsyncSession = Depends(get_session),
+) -> List[ProductRead]:
+    """
+    Возвращает список всех основных товаров из БД.
+    
+    Фильтрует продукты по роли "основной товар" из поля raw_attributes->product_role.
+    """
+    products = await get_products_by_role(db, role="основной товар")
+    return [ProductRead.model_validate(product) for product in products]
