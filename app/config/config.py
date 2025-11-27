@@ -5,22 +5,22 @@ class Settings(BaseSettings):
     DB_HOST: str = Field(..., env="DB_HOST")
     DB_PORT: str = Field(..., env="DB_PORT")
     DB_USER: str = Field(..., env="DB_USER")
-    DB_PASS: str = Field(..., env="DB_PASS")
-    DB_NAME: str = Field(..., env="DB_NAME")
+    DB_PASSWORD: str = Field(..., env="DB_PASSWORD")
+    DB_DB: str = Field(..., env="DB_DB")
     DB_ECHO: bool = Field(False, env="DB_ECHO")
 
     @property
     def database_url_async(self) -> str:
         return (
-            f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASS}"
-            f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+            f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASSWORD}"
+            f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_DB}"
         )
     
     @property
     def database_url_sync(self) -> str:
         return (
-            f"postgresql://{self.DB_USER}:{self.DB_PASS}"
-            f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+            f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}"
+            f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_DB}"
         )
 
     @property
@@ -33,7 +33,7 @@ class Settings(BaseSettings):
         return self.DB_ECHO
 
     class Config:
-        env_file = "app/config/.env"
+        env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
 
