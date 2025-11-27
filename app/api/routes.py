@@ -1,0 +1,70 @@
+from typing import List
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..crud import (
+    get_product,
+    get_recommendations,
+    create_feedback,
+)
+from ..database import get_session
+from ..models import Recommendation
+from ..schemas import RecommendationRead, FeedbackCreate, FeedbackRead, ProductRead
+
+router = APIRouter()
+
+
+@router.get(
+    "/recommendations/{product_id}",
+    response_model=List[RecommendationRead],
+    summary="Получить сопутствующие товары",
+)
+async def get_recommendations_view(
+    product_id: int,
+    db: AsyncSession = Depends(get_session),
+) -> List[RecommendationRead]:
+    """
+    Возвращает 20 самых похожих товаров для заданного product_id,
+    отсортированных по similarity_score.
+    """
+    product = await get_product(db, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    recommendations: List[Recommendation] = await get_recommendations(
+        db, product_id=product_id, limit=20
+    )
+
+    return [
+        RecommendationRead(
+            id=r.id,
+            similarity_score=r.similarity_score,
+            created_at=r.created_at,
+            recommended_product=ProductRead.model_validate(r.recommended_product),
+        )
+        for r in recommendations
+    ]
+
+
+@router.post(
+    "/feedback",
+    response_model=FeedbackRead,
+    summary="Зафиксировать фидбек по рекомендации",
+)
+async def create_feedback_view(
+    payload: FeedbackCreate,
+    db: AsyncSession = Depends(get_session),
+) -> FeedbackRead:
+    """
+    Принимает ID исходного товара и ID выбранного аналога,
+    а также флаг «подошёл / не подошёл».
+    """
+    # При желании можно дополнительно проверять существование товаров.
+    feedback = await create_feedback(
+        db=db,
+        product_id=payload.product_id,
+        recommended_product_id=payload.recommended_product_id,
+        is_relevant=payload.is_relevant,
+    )
+    return feedback
