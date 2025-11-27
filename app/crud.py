@@ -1,6 +1,6 @@
 from typing import Iterable, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, String, cast, text
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas import ProductRead, RecommendationRead
@@ -10,6 +10,34 @@ from .models import Product, Recommendation, Feedback
 
 async def get_product(db: AsyncSession, product_id: int) -> Optional[Product]:
     return await db.get(Product, product_id)
+
+
+async def get_products_by_role(
+    db: AsyncSession,
+    role: Optional[str] = None,
+) -> List[Product]:
+    """
+    Получить список продуктов, отфильтрованных по роли.
+    
+    Если role указан, фильтрует продукты где raw_attributes->>'product_role' = role.
+    Если role не указан, возвращает все продукты.
+    """
+    stmt = select(Product)
+    
+    if role:
+        # Фильтруем по product_role в JSON поле raw_attributes
+        # Для PostgreSQL используем оператор ->> для получения текстового значения из JSON
+        # Сначала проверяем что raw_attributes не NULL и содержит ключ product_role
+        # Используем text() с параметризованным запросом для безопасности
+        stmt = stmt.where(
+            Product.raw_attributes.isnot(None)
+        ).where(
+            text("raw_attributes->>'product_role' = :role").params(role=role)
+        )
+    
+    result = await db.execute(stmt)
+    products = list(result.scalars().all())
+    return products
 
 
 # async def get_recommendations(
