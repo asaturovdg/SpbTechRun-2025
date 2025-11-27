@@ -3,7 +3,8 @@ from typing import Iterable, List, Optional
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
-
+from app.schemas import ProductRead, RecommendationRead
+from recsys import RecommendationEngine
 from .models import Product, Recommendation, Feedback
 
 
@@ -11,27 +12,67 @@ async def get_product(db: AsyncSession, product_id: int) -> Optional[Product]:
     return await db.get(Product, product_id)
 
 
+# async def get_recommendations(
+#     db: AsyncSession,
+#     product_id: int,
+#     limit: int = 20,
+# ) -> List[Recommendation]:
+#     """
+#     Вернуть top-N рекомендованных товаров по product_id.
+
+#     Рекомендации загружаются вместе с recommended_product,
+#     чтобы избежать ленивых запросов внутри async-контекста.
+#     """
+#     stmt = (
+#         select(Recommendation)
+#         .options(selectinload(Recommendation.recommended_product))
+#         .where(Recommendation.product_id == product_id)
+#         .order_by(Recommendation.similarity_score.desc())
+#         .limit(limit)
+#     )
+#     result = await db.execute(stmt)
+#     return result.scalars().all()
+
 async def get_recommendations(
-    db: AsyncSession,
+    db: AsyncSession,    
     product_id: int,
     limit: int = 20,
-) -> List[Recommendation]:
+) -> List[RecommendationRead]:
     """
     Вернуть top-N рекомендованных товаров по product_id.
 
     Рекомендации загружаются вместе с recommended_product,
     чтобы избежать ленивых запросов внутри async-контекста.
     """
-    stmt = (
-        select(Recommendation)
-        .options(selectinload(Recommendation.recommended_product))
-        .where(Recommendation.product_id == product_id)
-        .order_by(Recommendation.similarity_score.desc())
-        .limit(limit)
-    )
-    result = await db.execute(stmt)
-    return result.scalars().all()
+    recommender = RecommendationEngine()
+    recommendations = recommender.get_ranking(product_id=product_id)
 
+
+    return [
+        RecommendationRead(
+            id=r["id"],
+            similarity_score=r["similarity_score"],
+            created_at=r["created_at"],
+            recommended_product=ProductRead.model_validate(r["recommended_product"]),
+        )
+        for r in recommendations
+    ]
+
+# async def create_feedback(
+#     db: AsyncSession,
+#     product_id: int,
+#     recommended_product_id: int,
+#     is_relevant: bool,
+# ) -> Feedback:
+#     feedback = Feedback(
+#         product_id=product_id,
+#         recommended_product_id=recommended_product_id,
+#         is_relevant=is_relevant,
+#     )
+#     db.add(feedback)
+#     await db.commit()
+#     await db.refresh(feedback)
+#     return feedback
 
 async def create_feedback(
     db: AsyncSession,
@@ -39,6 +80,9 @@ async def create_feedback(
     recommended_product_id: int,
     is_relevant: bool,
 ) -> Feedback:
+    recommender = RecommendationEngine()
+
+    recommender.update_model(product_id, recommended_product_id, is_relevant)
     feedback = Feedback(
         product_id=product_id,
         recommended_product_id=recommended_product_id,

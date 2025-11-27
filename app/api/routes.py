@@ -32,19 +32,11 @@ async def get_recommendations_view(
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    recommendations: List[Recommendation] = await get_recommendations(
+    recommendations: List[RecommendationRead] = await get_recommendations(
         db, product_id=product_id, limit=20
     )
 
-    return [
-        RecommendationRead(
-            id=r.id,
-            similarity_score=r.similarity_score,
-            created_at=r.created_at,
-            recommended_product=ProductRead.model_validate(r.recommended_product),
-        )
-        for r in recommendations
-    ]
+    return recommendations
 
 
 @router.post(
