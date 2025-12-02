@@ -1,14 +1,39 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+import numpy as np
+from numpydantic import NDArray, Shape
+from pydantic import BaseModel, Field
 
 class ProductBase(BaseModel):
-    external_id: str
     name: str
     category_id: Optional[str] = None
     price: Optional[float] = None
     raw_attributes: Optional[Dict[str, Any]] = None
+
+    name: str
+    category_name: str
+    vendor: str
+    price: Optional[float]
+    category_id: Optional[str]
+    type: str
+    parent_id: str
+    parent_name: str
+    weight_kg: Optional[float]
+    shipping_weight_kg: Optional[float]
+    volume_l: Optional[float]
+    length_mm: Optional[float]
+
+    key_params: Optional[dict]
+
+    picture_url: str
+    url: str
+    description: str
+    product_role: str
+    
+    embedding: Optional[NDArray[Shape["1024"], np.float32]]
+
+    model_config = {"arbitrary_types_allowed": True}
 
 
 class ProductCreate(ProductBase):

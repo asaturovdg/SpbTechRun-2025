@@ -6,11 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..crud import (
     get_product,
     get_recommendations,
-    create_feedback,
+    handle_feedback,
     get_products_by_role,
 )
 from ..database import get_session
-from ..models import Recommendation
 from ..schemas import RecommendationRead, FeedbackCreate, FeedbackRead, ProductRead
 
 router = APIRouter()
@@ -54,7 +53,7 @@ async def create_feedback_view(
     а также флаг «подошёл / не подошёл».
     """
     # При желании можно дополнительно проверять существование товаров.
-    feedback = await create_feedback(
+    feedback = await handle_feedback(
         db=db,
         product_id=payload.product_id,
         recommended_product_id=payload.recommended_product_id,
