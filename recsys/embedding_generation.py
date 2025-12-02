@@ -142,12 +142,14 @@ def save_embeddings_batch_to_db(engine, results: List[Tuple[int, Optional[List[f
                     text("UPDATE products SET embedding = :embedding WHERE id = :id"),
                     {"embedding": embedding_str, "id": product_id}
                 )
+                # Commit each successful update to avoid losing progress
+                session.commit()
                 success_count += 1
             except Exception as e:
+                # Rollback to reset session state, allowing subsequent updates to work
+                session.rollback()
                 print(f"  DB Error for product {product_id}: {e}")
                 fail_count += 1
-        
-        session.commit()
     
     return success_count, fail_count
 
