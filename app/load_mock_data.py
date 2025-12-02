@@ -6,30 +6,40 @@ from sqlalchemy import select
 from app.database import async_session
 from app.models import Product
 
-MOCK_PATH = Path("recsys/MOCK_DB.json")
+MOCK_PATH = Path("recsys/product.json")
 
 def to_payload(item: dict) -> dict:
     return {
-        "external_id": str(item["id"]),
-        "name": item["name"],
-        "category_id": item.get("category_id"),
+        "name": item.get("name"),
+        "category_name": item.get("category_name"),
+        "vendor": item.get("vendor"),
         "price": float(item.get("price") or 0),
-        "raw_attributes": {
-            "picture_url": item.get("picture_url"),
-            "vendor": item.get("vendor"),
-            "white_box_type": item.get("white_box_type"),
-            "product_role": item.get("product_role"),
-            "category_name": item.get("category_name"),
-            "int_id": item.get("int_id"),
-        },
+
+        "category_id": item.get("category_id"),
+        "type": item.get("type"),
+        "parent_id": item.get("parent_id"),
+        "parent_name": item.get("parent_name"),
+
+        "weight_kg": item.get("weight_kg"),
+        "shipping_weight_kg": item.get("shipping_weight_kg"),
+        "volume_l": item.get("volume_l"),
+        "length_mm": item.get("length_mm"),
+
+        "key_params": item.get("key_params"),
+
+        "picture_url": item.get("picture_url"),
+        "url": item.get("url"),
+        "description": item.get("description"),
+        "product_role": item.get("product_role"),
     }
+
 
 async def load_mock():
     data = json.loads(MOCK_PATH.read_text(encoding="utf-8"))
     async with async_session() as session:
         for item in data:
             payload = to_payload(item)
-            stmt = select(Product).where(Product.external_id == payload["external_id"])
+            stmt = select(Product).where(Product.name == payload["name"])
             result = await session.execute(stmt)
             product = result.scalars().first()
 
