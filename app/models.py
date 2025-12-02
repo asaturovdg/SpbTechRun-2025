@@ -3,7 +3,7 @@ from typing import Optional, List
 
 import numpy as np
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import BigInteger, Integer, String, Float, Boolean, ForeignKey, DateTime, JSON, Text
+from sqlalchemy import BigInteger, Integer, String, Float, Boolean, ForeignKey, DateTime, JSON, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -100,4 +100,30 @@ class Feedback(Base):
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
+    )
+
+class ArmStats(Base):
+    __tablename__ = "arm_stats"
+    
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), 
+        nullable=False, 
+        index=True
+    )
+    recommended_product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), 
+        nullable=False, 
+        index=True
+    )
+    alpha: Mapped[float] = mapped_column(Float, default=1.0)
+    beta: Mapped[float] = mapped_column(Float, default=1.0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, 
+        default=func.current_timestamp(), 
+        onupdate=func.current_timestamp()
+    )
+    
+    __table_args__ = (
+        UniqueConstraint("product_id", "recommended_product_id"),
     )

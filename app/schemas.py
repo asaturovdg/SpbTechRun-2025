@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 from numpydantic import NDArray, Shape
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 class ProductBase(BaseModel):
     name: str

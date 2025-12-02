@@ -5,8 +5,9 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas import ProductRead, RecommendationRead
 from recsys import RecommendationEngine
-from .models import Product, Recommendation, Feedback
+from .models import ArmStats, Product, Recommendation, Feedback
 
+from .database import get_products_by_role, create_feedback, get_or_create_arm_stats, update_arm_stats
 
 async def get_product(db: AsyncSession, product_id: int) -> Optional[Product]:
     return await db.get(Product, product_id)
@@ -22,13 +23,8 @@ async def get_products_by_role(
     Если role указан, фильтрует продукты где product_role = role.
     Если role не указан, возвращает все продукты.
     """
-    stmt = select(Product)
-    
-    if role:
-        stmt = stmt.where(Product.product_role == role)
-    
-    result = await db.execute(stmt)
-    products = list(result.scalars().all())
+
+    products = await get_products_by_role(db, role)
     return products
 
 async def get_recommendations(
@@ -56,7 +52,7 @@ async def get_recommendations(
         for r in recommendations
     ]
 
-async def create_feedback(
+async def handle_feedback(
     db: AsyncSession,
     product_id: int,
     recommended_product_id: int,
@@ -64,13 +60,28 @@ async def create_feedback(
 ) -> Feedback:
     recommender = RecommendationEngine()
 
-    recommender.update_model(product_id, recommended_product_id, is_relevant)
-    feedback = Feedback(
-        product_id=product_id,
-        recommended_product_id=recommended_product_id,
-        is_relevant=is_relevant,
+    feedback = await create_feedback(
+        db,
+        Feedback(
+            product_id=product_id,
+            recommended_product_id=recommended_product_id,
+            is_relevant=is_relevant,
+        )
+    ) 
+    
+    
+    arm = await get_or_create_arm_stats(
+        db, 
+        product_id,
+        recommended_product_id
     )
-    db.add(feedback)
-    await db.commit()
-    await db.refresh(feedback)
+
+    if is_relevant:
+        arm.alpha += 1
+    else:
+        arm.beta += 1
+
+    await update_arm_stats(db, arm)
+    recommender.update_model(product_id, recommended_product_id, is_relevant)
+
     return feedback
