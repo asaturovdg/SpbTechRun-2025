@@ -7,6 +7,7 @@ from sqlalchemy import BigInteger, Integer, String, Float, Boolean, ForeignKey, 
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
+from numpydantic import NDArray, Shape
 
 class Base(DeclarativeBase):
     pass
@@ -21,15 +22,15 @@ class Product(Base):
     __tablename__ = "products"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    # external_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     category_name: Mapped[str] = mapped_column(String(256), nullable=False)
-    vendor: Mapped[str] = mapped_column(String(128), nullable=False)
+    vendor: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     category_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    type: Mapped[str] = mapped_column(String(128), nullable=True)
-    parent_id: Mapped[str] = mapped_column(String(64), nullable=True)
-    parent_name: Mapped[str] = mapped_column(String(128), nullable=True)
+    type: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    parent_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    parent_name: Mapped[str] = mapped_column(String(128), nullable=False)
     weight_kg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     shipping_weight_kg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     volume_l: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -37,12 +38,12 @@ class Product(Base):
 
     key_params: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
-    picture_url: Mapped[str] = mapped_column(Text, nullable=False)
+    picture_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     url: Mapped[str] = mapped_column(Text, nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     product_role: Mapped[str] = mapped_column(String(64), nullable=False)
     
-    embedding = mapped_column(Vector(1024), nullable=True)
+    embedding: Mapped[Optional[NDArray[Shape["1024"], np.float32]]] = mapped_column(Vector(1024), nullable=True)
 
 
 class Recommendation(Base):
