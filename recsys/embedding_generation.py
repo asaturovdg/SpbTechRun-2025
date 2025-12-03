@@ -15,15 +15,23 @@ import time
 from typing import List, Optional, Tuple
 from tqdm import tqdm
 
+
+try:
+    import nest_asyncio
+    nest_asyncio.apply()
+    NEST_ASYNCIO_APPLIED = True
+except ImportError:
+    NEST_ASYNCIO_APPLIED = False
+
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-# Force environment variables for local testing
-os.environ.setdefault("DB_HOST", "localhost")
-os.environ.setdefault("DB_PORT", "5433")
-os.environ.setdefault("DB_USER", "postgres")
-os.environ.setdefault("DB_PASSWORD", "postgres")
-os.environ.setdefault("DB_DB", "recsys")
+# Force environment variables
+os.environ["DB_HOST"] = "localhost"
+os.environ["DB_PORT"] = "5433"
+os.environ["DB_USER"] = "postgres"
+os.environ["DB_PASSWORD"] = "postgres"
+os.environ["DB_DB"] = "recsys"
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
@@ -247,7 +255,25 @@ def main():
     print("\n[Step 4] Generate embeddings (async)")
     print("-" * 80)
     
-    success, failed, elapsed = asyncio.run(process_embeddings_async(df, engine))
+    # Handle different event loop scenarios
+    try:
+        # Check if there's already a running event loop
+        loop = asyncio.get_running_loop()
+        # If we get here, there's a running loop - use nest_asyncio or create task
+        if NEST_ASYNCIO_APPLIED:
+            success, failed, elapsed = asyncio.run(process_embeddings_async(df, engine))
+        else:
+            # Fallback: run in existing loop
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(
+                    asyncio.run, 
+                    process_embeddings_async(df, engine)
+                )
+                success, failed, elapsed = future.result()
+    except RuntimeError:
+        # No running event loop - safe to use asyncio.run()
+        success, failed, elapsed = asyncio.run(process_embeddings_async(df, engine))
     
     # Step 5: Verify results
     print("\n[Step 5] Verify results")

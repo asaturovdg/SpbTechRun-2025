@@ -69,7 +69,8 @@ get_repository()                              - Singleton accessor
 
 ```
 ThompsonSampler (Class)
-├── __init__()                                - Initialize arm_params dict
+├── __init__(engine)                          - Initialize + load from DB
+├── _load_from_db()                           - Load arm_stats from database
 ├── get_params(key)                           - Get Beta(α,β) for an arm
 ├── sample(key)                               - Sample from Beta distribution
 ├── update(key, is_success)                   - Update α or β based on feedback
@@ -96,9 +97,10 @@ RecommendationEngine (Class)
 │   └── Combined: (base*0.6 + thompson*0.4) * price_factor
 ├── _build_response(scored_candidates)        - Format to API schema
 ├── update_model(product_id, rec_id, is_relevant)
-│   └── Update Thompson Sampling parameters
+│   └── Update Thompson Sampling parameters (memory)
 ├── get_arm_stats(product_id, rec_id)         - Get arm statistics
-└── reload_data()                             - Reload from database
+├── reload_data()                             - Reload products from database
+└── reload_arm_stats()                        - Reload arm_stats from database
 ```
 
 ### Scoring Formula
@@ -162,5 +164,14 @@ products:
   - picture_url, url, description
   - product_role              -- 'основной товар' or 'сопутка'
   - embedding (Vector 1024)   -- pgvector
+
+arm_stats:                    -- Thompson Sampling parameters
+  - id (PK)
+  - product_id (FK)           -- Main product
+  - recommended_product_id (FK) -- Recommended product
+  - alpha (default 1.0)       -- Success count + 1
+  - beta (default 1.0)        -- Failure count + 1
+  - updated_at                -- Last update timestamp
+  - UNIQUE(product_id, recommended_product_id)
 ```
 

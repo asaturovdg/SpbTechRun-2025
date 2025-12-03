@@ -2,19 +2,43 @@
 Recommendation Engine - Algorithm logic
 
 """
-import random
 import numpy as np
 from datetime import datetime
 from typing import List, Dict, Tuple
+
+from sqlalchemy import  text
+from sqlalchemy.orm import Session
 
 from .db_repository import get_repository, ProductRepository
 
 
 class ThompsonSampler: 
-    def __init__(self):
+    def __init__(self, engine=None):
         # key: (product_id, recommended_product_id)
         # value: (alpha, beta) - Beta distribution parameters
         self.arm_params: Dict[tuple, Tuple[float, float]] = {}
+        self.engine = engine
+        
+        # Load existing arm stats from database
+        if engine:
+            self._load_from_db()
+    
+    def _load_from_db(self):
+        """Load arm_stats from database on startup"""
+        try:
+            with Session(self.engine) as session:
+                result = session.execute(text(
+                    "SELECT product_id, recommended_product_id, alpha, beta FROM arm_stats"
+                ))
+                count = 0
+                for row in result:
+                    key = (row.product_id, row.recommended_product_id)
+                    self.arm_params[key] = (float(row.alpha), float(row.beta))
+                    count += 1
+                if count > 0:
+                    print(f"[ThompsonSampler] Loaded {count} arm stats from database")
+        except Exception as e:
+            print(f"[ThompsonSampler] Could not load arm_stats: {e}")
     
     def get_params(self, key: tuple) -> Tuple[float, float]:
         #Get Beta distribution parameters for an arm
@@ -72,7 +96,8 @@ class RecommendationEngine:
         self.repo = repository or get_repository()
         
         # Thompson Sampling for exploration-exploitation
-        self.sampler = ThompsonSampler()
+        # Pass database engine to load existing arm_stats
+        self.sampler = ThompsonSampler(engine=self.repo.engine)
         
         # Price penalty configuration
         self.price_penalty_threshold = 1.5  # Penalty if accessory > 1.5x main product price
@@ -233,8 +258,7 @@ class RecommendationEngine:
                 # Use hash for stability (same product always gets same score)
                 base_score = 0.3 + (hash(item['id']) % 1000) / 5000.0  # 0.3~0.5
             else:
-                # Type-based candidates: deterministic mid-range score
-                base_score = 0.5 + (hash(item['id']) % 1000) / 2500.0  # 0.5~0.9
+                base_score = 0.1 + (hash(item['id']) % 1000) / 5000.0 
             
             # Thompson Sampling weight (exploration-exploitation)
             arm_key = (main_product_id, item['id'])
@@ -283,7 +307,6 @@ class RecommendationEngine:
                 "picture_url": item.get('picture_url', ''),
                 "product_role": item.get('product_role', ''),
                 "type": item.get('type', ''),
-                # Additional fields if needed
                 "url": item.get('url', ''),
                 "description": item.get('description', ''),
             }
@@ -321,7 +344,7 @@ class RecommendationEngine:
         # Get expected value after update
         expected = self.sampler.get_expected_value(arm_key)
         
-        action = "👍 Positive" if is_relevant else "👎 Negative"
+        action = "👍😊 Positive" if is_relevant else "👎😔 Negative"
         print(f"[RecommendationEngine] Feedback: {action} | "
               f"Main={product_id}, Rec={recommended_product_id} | "
               f"Beta({alpha:.0f},{beta:.0f}) -> E[θ]={expected:.3f}")
@@ -336,4 +359,8 @@ class RecommendationEngine:
     def reload_data(self):
         """Reload data from database"""
         self.repo.reload()
+    
+    def reload_arm_stats(self):
+        """Reload arm_stats from database"""
+        self.sampler._load_from_db()
 

@@ -13,12 +13,12 @@ from collections import defaultdict
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-# Force environment variables for local testing
-os.environ.setdefault("DB_HOST", "localhost")
-os.environ.setdefault("DB_PORT", "5433")
-os.environ.setdefault("DB_USER", "postgres")
-os.environ.setdefault("DB_PASSWORD", "postgres")
-os.environ.setdefault("DB_DB", "recsys")
+# Force environment variables
+os.environ["DB_HOST"] = "localhost"
+os.environ["DB_PORT"] = "5433"
+os.environ["DB_USER"] = "postgres"
+os.environ["DB_PASSWORD"] = "postgres"
+os.environ["DB_DB"] = "recsys"
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
