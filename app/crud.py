@@ -3,11 +3,11 @@ from typing import Iterable, List, Optional
 from sqlalchemy import select, String, cast, text
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.schemas import ProductRead, ProductRecommendation, RecommendationRead
+from app.schemas import ProductRead, ProductRead, RecommendationRead
 from recsys import RecommendationEngine
 from .models import ArmStats, Product, Recommendation, Feedback
 
-from .database import get_products_by_role, create_feedback, get_or_create_arm_stats, update_arm_stats
+from .database import get_products, create_feedback, get_or_create_arm_stats, update_arm_stats
 
 async def get_product(db: AsyncSession, product_id: int) -> Optional[Product]:
     return await db.get(Product, product_id)
@@ -24,7 +24,7 @@ async def get_products_by_role(
     Если role не указан, возвращает все продукты.
     """
 
-    products = await get_products_by_role(db, role)
+    products = await get_products(db, role)
     return products
 
 async def get_recommendations(
@@ -47,7 +47,7 @@ async def get_recommendations(
             id=r["id"],
             similarity_score=r["similarity_score"],
             created_at=r["created_at"],
-            recommended_product=ProductRecommendation.model_validate(r["recommended_product"]),
+            recommended_product=ProductRead.model_validate(r["recommended_product"]),
         )
         for r in recommendations
     ]
