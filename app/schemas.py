@@ -32,6 +32,8 @@ class ProductBase(BaseModel):
     product_role: str
     
     embedding: Optional[NDArray[Shape["1024"], np.float32]]
+    expert_embedding: Optional[NDArray[Shape["1024"], np.float32]]
+    expert_reason: Optional[str]
 
     model_config = {"arbitrary_types_allowed": True}
 

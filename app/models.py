@@ -44,6 +44,8 @@ class Product(Base):
     product_role: Mapped[str] = mapped_column(String(64), nullable=False)
     
     embedding: Mapped[Optional[NDArray[Shape["1024"], np.float32]]] = mapped_column(Vector(1024), nullable=True)
+    expert_embedding: Mapped[Optional[NDArray[Shape["1024"], np.float32]]] = mapped_column(Vector(1024), nullable=True) 
+    expert_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class Recommendation(Base):
