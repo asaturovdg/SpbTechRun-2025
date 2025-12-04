@@ -15,7 +15,6 @@ services:
 
   db:
     image: pgvector/pgvector:pg18
-    container_name: ${DB_HOST}
     restart: unless-stopped
     env_file:
       - .env
@@ -29,7 +28,7 @@ services:
       timeout: 5s
       retries: 5
     ports:
-      - "${DB_PORT}:5432"
+      - "${DB_EXTERNAL_PORT}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/
   
@@ -46,7 +45,7 @@ services:
     image: ollama/ollama:latest
     container_name: ${OLLAMA_HOST}
     ports:
-      - "${OLLAMA_PORT}:11434"
+      - "${OLLAMA_EXTERNAL_PORT}:11434"
     volumes:
       - ollama:/root/.ollama
     deploy:
