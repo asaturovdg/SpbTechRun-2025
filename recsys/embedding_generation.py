@@ -16,12 +16,6 @@ from typing import List, Optional, Tuple
 from tqdm import tqdm
 
 
-try:
-    import nest_asyncio
-    nest_asyncio.apply()
-    NEST_ASYNCIO_APPLIED = True
-except ImportError:
-    NEST_ASYNCIO_APPLIED = False
 
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -177,7 +171,6 @@ async def process_embeddings_async(df: pd.DataFrame, engine) -> Tuple[int, int, 
     total = len(texts_with_ids)
     
     print(f"Processing {total} products with batch size {BATCH_SIZE}...")
-    print("Note: First batch may be slower as model loads into VRAM\n")
     
     # Progress bar
     pbar = tqdm(total=total, desc="Generating embeddings", unit="item")
@@ -254,26 +247,10 @@ def main():
     # Step 4: Generate embeddings
     print("\n[Step 4] Generate embeddings (async)")
     print("-" * 80)
+
+    success, failed, elapsed = asyncio.run(process_embeddings_async(df, engine))
     
-    # Handle different event loop scenarios
-    try:
-        # Check if there's already a running event loop
-        loop = asyncio.get_running_loop()
-        # If we get here, there's a running loop - use nest_asyncio or create task
-        if NEST_ASYNCIO_APPLIED:
-            success, failed, elapsed = asyncio.run(process_embeddings_async(df, engine))
-        else:
-            # Fallback: run in existing loop
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(
-                    asyncio.run, 
-                    process_embeddings_async(df, engine)
-                )
-                success, failed, elapsed = future.result()
-    except RuntimeError:
-        # No running event loop - safe to use asyncio.run()
-        success, failed, elapsed = asyncio.run(process_embeddings_async(df, engine))
+
     
     # Step 5: Verify results
     print("\n[Step 5] Verify results")
