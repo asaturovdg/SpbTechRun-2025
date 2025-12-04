@@ -15,17 +15,8 @@ import time
 from typing import List, Optional, Tuple
 from tqdm import tqdm
 
-
-
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
-# Force environment variables
-os.environ["DB_HOST"] = "localhost"
-os.environ["DB_PORT"] = "5433"
-os.environ["DB_USER"] = "postgres"
-os.environ["DB_PASSWORD"] = "postgres"
-os.environ["DB_DB"] = "recsys"
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
@@ -91,9 +82,13 @@ async def generate_embedding_async(client: AsyncClient, text: str, product_id: i
     return (product_id, None)
 
 
-async def generate_embeddings_batch_async(texts_with_ids: List[Tuple[int, str]]) -> List[Tuple[int, Optional[List[float]]]]:
+async def generate_embeddings_batch_async(
+    texts_with_ids: List[Tuple[int, str]], 
+    ollama_url: Optional[str] = None
+) -> List[Tuple[int, Optional[List[float]]]]:
     """Generate embeddings for a batch of texts concurrently"""
-    client = AsyncClient()
+    # Use provided URL or default (localhost)
+    client = AsyncClient(host=ollama_url) if ollama_url else AsyncClient()
     tasks = [
         generate_embedding_async(client, text, product_id)
         for product_id, text in texts_with_ids
@@ -160,14 +155,45 @@ def save_embeddings_batch_to_db(engine, results: List[Tuple[int, Optional[List[f
 # Main Pipeline
 # ============================================================================
 
-async def process_embeddings_async(df: pd.DataFrame, engine) -> Tuple[int, int, float]:
+def get_products_without_embedding(engine, product_ids: List[int]) -> List[int]:
+    """Get list of product IDs that don't have embeddings yet"""
+    with Session(engine) as session:
+        result = session.execute(
+            text("SELECT id FROM products WHERE embedding IS NOT NULL AND id = ANY(:ids)"),
+            {"ids": product_ids}
+        )
+        existing_ids = {row[0] for row in result.fetchall()}
+    
+    return [pid for pid in product_ids if pid not in existing_ids]
+
+
+async def process_embeddings_async(
+    df: pd.DataFrame, 
+    engine, 
+    ollama_url: Optional[str] = None
+) -> Tuple[int, int, float]:
     """Process all embeddings asynchronously"""
     total_success = 0
     total_fail = 0
     start_time = time.time()
     
+    # Check which products already have embeddings
+    all_ids = df['id'].tolist()
+    ids_to_process = get_products_without_embedding(engine, all_ids)
+    
+    if len(ids_to_process) == 0:
+        print("All products already have embeddings. Skipping generation.")
+        return len(all_ids), 0, 0.0
+    
+    skipped = len(all_ids) - len(ids_to_process)
+    if skipped > 0:
+        print(f"Skipping {skipped} products that already have embeddings.")
+    
+    # Filter dataframe to only include products without embeddings
+    df_to_process = df[df['id'].isin(ids_to_process)]
+    
     # Prepare data: (product_id, embedding_prompt)
-    texts_with_ids = list(zip(df['id'].tolist(), df['embedding_prompt'].tolist()))
+    texts_with_ids = list(zip(df_to_process['id'].tolist(), df_to_process['embedding_prompt'].tolist()))
     total = len(texts_with_ids)
     
     print(f"Processing {total} products with batch size {BATCH_SIZE}...")
@@ -181,7 +207,7 @@ async def process_embeddings_async(df: pd.DataFrame, engine) -> Tuple[int, int, 
         batch = texts_with_ids[batch_start:batch_end]
         
         # Generate embeddings concurrently
-        results = await generate_embeddings_batch_async(batch)
+        results = await generate_embeddings_batch_async(batch, ollama_url)
         
         # Save to database
         success, fail = save_embeddings_batch_to_db(engine, results)
@@ -201,7 +227,11 @@ async def process_embeddings_async(df: pd.DataFrame, engine) -> Tuple[int, int, 
     return total_success, total_fail, elapsed_total
 
 
-def main():
+async def main(ollama_url: Optional[str] = None):
+    """
+    ollama_url: Optional Ollama server URL. If None, uses localhost.
+                In Docker, pass settings.ollama_url.
+    """
     print("\n" + "=" * 80)
     print("Embedding Generation Pipeline")
     print("=" * 80)
@@ -248,9 +278,7 @@ def main():
     print("\n[Step 4] Generate embeddings (async)")
     print("-" * 80)
 
-    success, failed, elapsed = asyncio.run(process_embeddings_async(df, engine))
-    
-
+    success, failed, elapsed = await process_embeddings_async(df, engine, ollama_url)
     
     # Step 5: Verify results
     print("\n[Step 5] Verify results")
@@ -272,11 +300,13 @@ def main():
     print(f"  Total records: {len(df)}")
     print(f"  Successfully generated: {success}")
     print(f"  Failed: {failed}")
-    print(f"  Success rate: {success/len(df)*100:.1f}%")
+    if len(df) > 0:
+        print(f"  Success rate: {success/len(df)*100:.1f}%")
     
     print(f"\nPerformance:")
     print(f"  Total time: {elapsed:.1f} seconds")
-    print(f"  Speed: {len(df)/elapsed:.1f} items/sec")
+    if elapsed > 0:
+        print(f"  Speed: {len(df)/elapsed:.1f} items/sec")
     print(f"  Concurrency: {BATCH_SIZE} parallel requests")
     
     print(f"\nDatabase:")
@@ -287,7 +317,14 @@ def main():
 
 
 if __name__ == "__main__":
-    success = main()
+    # Force environment variables for local development only
+    os.environ["DB_HOST"] = "localhost"
+    os.environ["DB_PORT"] = "5433"
+    os.environ["DB_USER"] = "postgres"
+    os.environ["DB_PASSWORD"] = "postgres"
+    os.environ["DB_DB"] = "recsys"
+    
+    success = asyncio.run(main())  # Use default localhost for Ollama
     if success:
         print("\n Pipeline completed successfully!")
     else:
