@@ -1,0 +1,66 @@
+services:
+  web:
+    build: .
+    command: >
+      sh -c "python -m app.load_mock_data && python -m recsys.auto_preprocess && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      alembic:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+
+  db:
+    image: pgvector/pgvector:pg18
+    container_name: ${DB_HOST}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_DB}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_DB}"]
+      interval: 8s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "${DB_PORT}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/
+  
+  alembic:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ${OLLAMA_HOST}
+    ports:
+      - "${OLLAMA_PORT}:11434"
+    volumes:
+      - ollama:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  ollama:
