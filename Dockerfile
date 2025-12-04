@@ -9,7 +9,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY ./app /app/app
 COPY ./alembic /app/alembic
 COPY ./recsys /app/recsys
-COPY ./frontend /app/frontend
 COPY alembic.ini /app/alembic.ini
 
 # Дефолтная команда (может быть перезаписана в docker-compose)
