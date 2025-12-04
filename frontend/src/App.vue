@@ -530,7 +530,6 @@ onUnmounted(() => {
   --color-success: #10B981;
   --color-error: #EF4444;
 
-  /* 高端背景色调整：冷调灰白 */
   --bg-main: #F0F2F5;
   --bg-card: #FFFFFF;
   --bg-secondary: #F1F5F9;
@@ -551,7 +550,6 @@ onUnmounted(() => {
 
 .app-container {
   min-height: 100vh;
-  /* 垂直渐变背景，模拟天光 */
   background: linear-gradient(180deg, #F8FAFC 0%, #EFF2F6 100%);
   color: var(--text-primary);
   font-family: var(--font-main);
@@ -560,7 +558,6 @@ onUnmounted(() => {
   position: relative;
 }
 
-/* 高端纹理：点阵 + 双色环境光晕 */
 .bg-pattern {
   position: fixed;
   inset: 0;
