@@ -135,7 +135,7 @@ async def main():
     print("-" * 80)
     
     from recsys import embedding_generation
-    success = embedding_generation.main(ollama_url=settings.ollama_url)
+    success = await embedding_generation.main(ollama_url=settings.ollama_url)
     if not success:
         print("FAILED: Embedding generation failed")
         return False
