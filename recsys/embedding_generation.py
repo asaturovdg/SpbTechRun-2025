@@ -155,6 +155,18 @@ def save_embeddings_batch_to_db(engine, results: List[Tuple[int, Optional[List[f
 # Main Pipeline
 # ============================================================================
 
+def get_products_without_embedding(engine, product_ids: List[int]) -> List[int]:
+    """Get list of product IDs that don't have embeddings yet"""
+    with Session(engine) as session:
+        result = session.execute(
+            text("SELECT id FROM products WHERE embedding IS NOT NULL AND id = ANY(:ids)"),
+            {"ids": product_ids}
+        )
+        existing_ids = {row[0] for row in result.fetchall()}
+    
+    return [pid for pid in product_ids if pid not in existing_ids]
+
+
 async def process_embeddings_async(
     df: pd.DataFrame, 
     engine, 
@@ -165,8 +177,23 @@ async def process_embeddings_async(
     total_fail = 0
     start_time = time.time()
     
+    # Check which products already have embeddings
+    all_ids = df['id'].tolist()
+    ids_to_process = get_products_without_embedding(engine, all_ids)
+    
+    if len(ids_to_process) == 0:
+        print("All products already have embeddings. Skipping generation.")
+        return len(all_ids), 0, 0.0
+    
+    skipped = len(all_ids) - len(ids_to_process)
+    if skipped > 0:
+        print(f"Skipping {skipped} products that already have embeddings.")
+    
+    # Filter dataframe to only include products without embeddings
+    df_to_process = df[df['id'].isin(ids_to_process)]
+    
     # Prepare data: (product_id, embedding_prompt)
-    texts_with_ids = list(zip(df['id'].tolist(), df['embedding_prompt'].tolist()))
+    texts_with_ids = list(zip(df_to_process['id'].tolist(), df_to_process['embedding_prompt'].tolist()))
     total = len(texts_with_ids)
     
     print(f"Processing {total} products with batch size {BATCH_SIZE}...")
@@ -273,11 +300,13 @@ def main(ollama_url: Optional[str] = None):
     print(f"  Total records: {len(df)}")
     print(f"  Successfully generated: {success}")
     print(f"  Failed: {failed}")
-    print(f"  Success rate: {success/len(df)*100:.1f}%")
+    if len(df) > 0:
+        print(f"  Success rate: {success/len(df)*100:.1f}%")
     
     print(f"\nPerformance:")
     print(f"  Total time: {elapsed:.1f} seconds")
-    print(f"  Speed: {len(df)/elapsed:.1f} items/sec")
+    if elapsed > 0:
+        print(f"  Speed: {len(df)/elapsed:.1f} items/sec")
     print(f"  Concurrency: {BATCH_SIZE} parallel requests")
     
     print(f"\nDatabase:")
@@ -295,7 +324,7 @@ if __name__ == "__main__":
     os.environ["DB_PASSWORD"] = "postgres"
     os.environ["DB_DB"] = "recsys"
     
-    success = main()  # Use default localhost for Ollama
+    success = asyncio.run(main())  # Use default localhost for Ollama
     if success:
         print("\n Pipeline completed successfully!")
     else:
