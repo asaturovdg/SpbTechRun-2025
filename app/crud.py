@@ -4,7 +4,8 @@ from sqlalchemy import select, String, cast, text
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas import ProductRead, ProductRead, RecommendationRead
-from recsys import RecommendationEngine
+from app.config.config import settings
+from recsys import get_recommender
 from .models import ArmStats, Product, Recommendation, Feedback
 
 from .database import get_products, create_feedback, get_or_create_arm_stats, update_arm_stats
@@ -38,7 +39,7 @@ async def get_recommendations(
     Рекомендации загружаются вместе с recommended_product,
     чтобы избежать ленивых запросов внутри async-контекста.
     """
-    recommender = RecommendationEngine()
+    recommender = get_recommender()  # Use singleton
     recommendations = recommender.get_ranking(product_id=product_id)
 
 
@@ -58,8 +59,20 @@ async def handle_feedback(
     recommended_product_id: int,
     is_relevant: bool,
 ) -> Feedback:
-    recommender = RecommendationEngine()
+    """
+    Handle user feedback and update Thompson Sampling parameters.
+    
+    Flow:
+    1. Save feedback to database
+    2. Update recommender (memory) - this handles similarity-based initialization
+    3. Get updated values from recommender and sync to database
+    
+    This ensures memory and database stay synchronized.
+    Uses singleton recommender to preserve state across requests.
+    """
+    recommender = get_recommender()  # Use singleton
 
+    # Step 1: Save feedback record
     feedback = await create_feedback(
         db,
         Feedback(
@@ -69,19 +82,22 @@ async def handle_feedback(
         )
     ) 
     
+    # Step 2: Update recommender (memory) - handles similarity initialization + update
+    recommender.update_model(product_id, recommended_product_id, is_relevant)
+    
+    # Step 3: Get updated values from recommender and sync to database
+    stats = recommender.get_arm_stats(product_id, recommended_product_id)
     
     arm = await get_or_create_arm_stats(
         db, 
         product_id,
         recommended_product_id
     )
-
-    if is_relevant:
-        arm.alpha += 1
-    else:
-        arm.beta += 1
+    
+    # Overwrite with values from recommender
+    arm.alpha = stats['alpha']
+    arm.beta = stats['beta']
 
     await update_arm_stats(db, arm)
-    recommender.update_model(product_id, recommended_product_id, is_relevant)
 
     return feedback

@@ -8,6 +8,7 @@ recsys/
 ├── recommender.py            - Recommendation engine (algorithm logic)
 ├── feature_engineering.py    - Feature cleaning pipeline
 ├── embedding_generation.py   - Embedding generation 
+├── auto_preprocess.py        - Docker entry point (model check + pipelines)
 ├── test_local.py             - Local testing script
 ├── __init__.py               - Module exports
 └── temp/                     - Temporary files (CSV outputs)
@@ -70,12 +71,16 @@ get_repository()                              - Singleton accessor
 ```
 ThompsonSampler (Class)
 ├── __init__(engine)                          - Initialize + load from DB
+│   └── Read parameters from settings (DEMO_MODE aware)
 ├── _load_from_db()                           - Load arm_stats from database
-├── get_params(key)                           - Get Beta(α,β) for an arm
-├── sample(key)                               - Sample from Beta distribution
+├── get_params(key, similarity=None)          - Get Beta(α,β) for an arm
+│   └── DEMO_MODE: Initialize with informed prior based on similarity
+├── sample(key, similarity=None)              - Sample from Beta distribution
 ├── update(key, is_success)                   - Update α or β based on feedback
+│   └── DEMO_MODE: Amplified update (×5) + cap at MAX_TOTAL
 ├── get_expected_value(key)                   - Get E[θ] = α/(α+β)
-└── get_stats(key)                            - Get full statistics
+├── get_stats(key)                            - Get full statistics
+└── initialize_from_similarity(key, sim)      - Initialize arm with similarity
 
 RecommendationEngine (Class)
 ├── __init__(repository=None)                 - Initialize (uses singleton)
@@ -105,11 +110,26 @@ RecommendationEngine (Class)
 
 ### Scoring Formula
 ```
-final_score = (base_score × 0.6 + thompson_weight × 0.4) × price_factor
+final_score = (base_score × 0.8 + thompson_weight × 0.2) × price_factor
 
 - base_score: vector similarity (0~1) or hash-based deterministic
 - thompson_weight: sampled from Beta(α, β), range 0~1
 - price_factor: 1.0 if ratio ≤ 1.5, else penalty up to 0.7
+```
+
+### DEMO_MODE Configuration 
+```
+Parameters (all configurable via .env):
+├── DEMO_MODE                 - Enable demo mode (default: true)
+├── TS_INIT_STRENGTH          - Similarity-based init strength (default: 4.0)
+├── TS_UPDATE_STRENGTH_DEMO   - Update strength in demo mode (default: 5.0)
+├── TS_UPDATE_STRENGTH_NORMAL - Update strength in normal mode (default: 1.0)
+└── TS_MAX_TOTAL              - Cap on α+β to prevent variance collapse (default: 50.0)
+
+DEMO_MODE effects:
+- Initialize new arms with informed prior: α = 1 + sim × INIT_STRENGTH
+- Amplified feedback: one click changes E[θ] by ~20% (vs ~5% in normal)
+- Cap prevents variance collapse after many feedbacks
 ```
 
 ---
@@ -139,11 +159,34 @@ Output: temp/product_features_cleaned.csv
 Functions (Async):
 ├── check_ollama()                            - Verify Ollama service
 ├── generate_embedding_async(client, text, id) - Single embedding
-├── generate_embeddings_batch_async(batch)    - Concurrent batch
+├── generate_embeddings_batch_async(batch, url) - Concurrent batch
+├── get_products_without_embedding(engine, ids) - Skip existing embeddings
 ├── save_embeddings_batch_to_db(engine, results) - Save to DB
-├── process_embeddings_async(df, engine)      - Main async loop
-└── main()                                    - Run pipeline
+├── process_embeddings_async(df, engine, url) - Main async loop
+└── main(ollama_url=None)                     - Run pipeline (async)
 
+Features:
+- Skips products that already have embeddings (avoid regeneration)
+- Supports custom Ollama URL for Docker environments
+- Progress bar with tqdm
+```
+
+---
+
+## auto_preprocess.py - Docker Entry Point
+
+```
+Functions (Async):
+├── get_ollama_client()                       - Get AsyncClient with settings.ollama_url
+├── wait_for_ollama()                         - Wait for Ollama service (max 120s)
+├── ensure_model_exists()                     - Check/pull bge-m3 model
+└── main()                                    - Orchestrate full pipeline
+
+Pipeline:
+1. Wait for Ollama service
+2. Check/download bge-m3 model
+3. Run feature_engineering.main()
+4. Run embedding_generation.main(ollama_url)
 ```
 
 ---

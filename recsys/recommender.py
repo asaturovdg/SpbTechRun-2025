@@ -11,17 +11,50 @@ from sqlalchemy.orm import Session
 
 from .db_repository import get_repository, ProductRepository
 
+# Import settings for DEMO_MODE
+try:
+    from app.config.config import settings
+    DEMO_MODE = settings.DEMO_MODE
+except:
+    DEMO_MODE = True  # Default to demo mode if settings unavailable
+
 
 class ThompsonSampler: 
+    """
+    Thompson Sampling for exploration-exploitation in recommendations.
+    
+    DEMO_MODE features:
+    - Initialize alpha/beta based on similarity score (informed prior)
+    - Amplified update strength for visible learning effects
+    - Cap on total to prevent variance collapse
+    
+    All parameters are read from settings (app/config/config.py)
+    """
+    
     def __init__(self, engine=None):
         # key: (product_id, recommended_product_id)
         # value: (alpha, beta) - Beta distribution parameters
         self.arm_params: Dict[tuple, Tuple[float, float]] = {}
         self.engine = engine
+        self.demo_mode = DEMO_MODE
+        
+        # Read parameters from settings
+        try:
+            self.init_strength = settings.TS_INIT_STRENGTH
+            self.update_strength = settings.ts_update_strength
+            self.max_total = settings.TS_MAX_TOTAL
+        except:
+            # Fallback defaults if settings unavailable
+            self.init_strength = 4.0
+            self.update_strength = 5.0 if DEMO_MODE else 1.0
+            self.max_total = 50.0
         
         # Load existing arm stats from database
         if engine:
             self._load_from_db()
+        
+        if self.demo_mode:
+            print(f"[ThompsonSampler] DEMO_MODE enabled: update_strength={self.update_strength}")
     
     def _load_from_db(self):
         """Load arm_stats from database on startup"""
@@ -40,46 +73,86 @@ class ThompsonSampler:
         except Exception as e:
             print(f"[ThompsonSampler] Could not load arm_stats: {e}")
     
-    def get_params(self, key: tuple) -> Tuple[float, float]:
-        #Get Beta distribution parameters for an arm
+    def get_params(self, key: tuple, similarity: float = None) -> Tuple[float, float]:
+        """
+        Get Beta distribution parameters for an arm.
+        
+        If this is a new arm and similarity is provided, initialize with
+        an informed prior based on vector similarity.
+        """
         if key not in self.arm_params:
-            # Prior: Beta(1, 1) = Uniform distribution
-            self.arm_params[key] = (1.0, 1.0)
+            if similarity is not None and self.demo_mode:
+                # Informed prior based on similarity
+                # High similarity -> higher alpha (more likely to be good)
+                alpha = 1.0 + similarity * self.init_strength
+                beta = 1.0 + (1.0 - similarity) * self.init_strength
+            else:
+                # Uninformed prior: Beta(1, 1) = Uniform distribution
+                alpha, beta = 1.0, 1.0
+            
+            self.arm_params[key] = (alpha, beta)
+        
         return self.arm_params[key]
     
-    def sample(self, key: tuple) -> float:
-        #Sample from Beta distribution for this arm
-        alpha, beta = self.get_params(key)
+    def sample(self, key: tuple, similarity: float = None) -> float:
+        """Sample from Beta distribution for this arm"""
+        alpha, beta = self.get_params(key, similarity)
         return np.random.beta(alpha, beta)
     
     def update(self, key: tuple, is_success: bool) -> Tuple[float, float]:
-        #Update arm parameters based on feedback
+        """
+        Update arm parameters based on feedback.
+        
+        In DEMO_MODE, updates are amplified for visible learning effects.
+        """
         alpha, beta = self.get_params(key)
         
         if is_success:
-            alpha += 1.0
+            alpha += self.update_strength
         else:
-            beta += 1.0
+            beta += self.update_strength
+        
+        # Apply cap to prevent variance collapse
+        total = alpha + beta
+        if total > self.max_total:
+            scale = self.max_total / total
+            alpha *= scale
+            beta *= scale
         
         self.arm_params[key] = (alpha, beta)
         return alpha, beta
     
     def get_expected_value(self, key: tuple) -> float:
-        #Get expected value (mean of Beta distribution)
+        """Get expected value (mean of Beta distribution)"""
         alpha, beta = self.get_params(key)
         return alpha / (alpha + beta)
     
     def get_stats(self, key: tuple) -> Dict:
-        #Get statistics for an arm
+        """Get statistics for an arm"""
         alpha, beta = self.get_params(key)
         return {
             "alpha": alpha,
             "beta": beta,
-            "successes": alpha - 1,
-            "failures": beta - 1,
-            "total": alpha + beta - 2,
             "expected_value": alpha / (alpha + beta),
+            "variance": (alpha * beta) / ((alpha + beta) ** 2 * (alpha + beta + 1)),
+            "demo_mode": self.demo_mode,
         }
+    
+    def initialize_from_similarity(self, key: tuple, similarity: float) -> Tuple[float, float]:
+        """
+        Initialize arm parameters based on similarity score.
+        Call this when creating a new arm with known similarity.
+        
+        Returns: (alpha, beta) for the new arm
+        """
+        if self.demo_mode:
+            alpha = 1.0 + similarity * self.init_strength
+            beta = 1.0 + (1.0 - similarity) * self.init_strength
+        else:
+            alpha, beta = 1.0, 1.0
+        
+        self.arm_params[key] = (alpha, beta)
+        return alpha, beta
 
 
 class RecommendationEngine:
@@ -246,23 +319,33 @@ class RecommendationEngine:
         candidates: List[Dict], 
         search_method: str = "none"
     ) -> List[Dict]:
-       # final_score = (base_score * 0.8 + thompson_weight * 0.2) * price_factor
+        """
+        Calculate final scores for candidates.
+        
+        Formula: final_score = (base_score * 0.8 + thompson_weight * 0.2) * price_factor
+        
+        In DEMO_MODE, Thompson Sampling is initialized with informed priors
+        based on vector similarity.
+        """
         scored = []
         
         for item in candidates:
             # Base score (from vector similarity or deterministic)
             if search_method == "vector" and 'similarity' in item:
                 base_score = item['similarity']
+                similarity_for_init = item['similarity']  # Use for TS initialization
             elif item.get('_is_fill'):
                 # Filled candidates get lower, deterministic score
-                # Use hash for stability (same product always gets same score)
                 base_score = 0.3 + (hash(item['id']) % 1000) / 5000.0  # 0.3~0.5
+                similarity_for_init = 0.3  # Low similarity for filled items
             else:
                 base_score = 0.1 + (hash(item['id']) % 1000) / 5000.0 
+                similarity_for_init = 0.1  
             
             # Thompson Sampling weight (exploration-exploitation)
+            # Pass similarity to initialize informed prior for new arms
             arm_key = (main_product_id, item['id'])
-            thompson_weight = self.sampler.sample(arm_key)
+            thompson_weight = self.sampler.sample(arm_key, similarity=similarity_for_init)
             
             # Price factor (penalize expensive accessories)
             candidate_price = item.get('price', 0) or 0
@@ -270,7 +353,6 @@ class RecommendationEngine:
             
             # Combine scores
             # Thompson weight is in [0, 1], use it to adjust the score
-            # Weight the base_score more heavily initially
             combined_score = base_score * 0.8 + thompson_weight * 0.2
             
             # Apply price penalty
