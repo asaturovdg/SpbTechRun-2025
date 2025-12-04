@@ -46,6 +46,25 @@ class ProductRead(ProductBase):
     model_config = {"from_attributes": True}
 
 
+class ProductRecommendation(BaseModel):
+    """
+    Product schema for recommendation results (new)
+    """
+    id: int
+    name: str
+    price: Optional[float] = None
+    category_id: Optional[str] = None
+    category_name: Optional[str] = None
+    vendor: Optional[str] = None
+    picture_url: Optional[str] = None
+    product_role: Optional[str] = None
+    type: Optional[str] = None
+    url: Optional[str] = None
+    description: Optional[str] = None
+    
+    model_config = {"from_attributes": True}
+
+
 class RecommendationRead(BaseModel):
     """
     Одна строка выдачи /recommendations/{product_id}.
@@ -53,8 +72,9 @@ class RecommendationRead(BaseModel):
 
     id: int
     similarity_score: float
+    created_at: Optional[str] = None  
 
-    recommended_product: ProductRead
+    recommended_product: ProductRecommendation  
 
     model_config = {"from_attributes": True}
 

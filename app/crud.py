@@ -3,7 +3,7 @@ from typing import Iterable, List, Optional
 from sqlalchemy import select, String, cast, text
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.schemas import ProductRead, RecommendationRead
+from app.schemas import ProductRead, ProductRecommendation, RecommendationRead
 from recsys import RecommendationEngine
 from .models import ArmStats, Product, Recommendation, Feedback
 
@@ -47,7 +47,7 @@ async def get_recommendations(
             id=r["id"],
             similarity_score=r["similarity_score"],
             created_at=r["created_at"],
-            recommended_product=ProductRead.model_validate(r["recommended_product"]),
+            recommended_product=ProductRecommendation.model_validate(r["recommended_product"]),
         )
         for r in recommendations
     ]
