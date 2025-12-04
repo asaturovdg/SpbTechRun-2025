@@ -227,7 +227,7 @@ async def process_embeddings_async(
     return total_success, total_fail, elapsed_total
 
 
-def main(ollama_url: Optional[str] = None):
+async def main(ollama_url: Optional[str] = None):
     """
     ollama_url: Optional Ollama server URL. If None, uses localhost.
                 In Docker, pass settings.ollama_url.
@@ -278,7 +278,7 @@ def main(ollama_url: Optional[str] = None):
     print("\n[Step 4] Generate embeddings (async)")
     print("-" * 80)
 
-    success, failed, elapsed = asyncio.run(process_embeddings_async(df, engine, ollama_url))
+    success, failed, elapsed = await process_embeddings_async(df, engine, ollama_url)
     
     # Step 5: Verify results
     print("\n[Step 5] Verify results")
