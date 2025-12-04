@@ -29,7 +29,7 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 
-async def get_products_by_role(
+async def get_products(
         session: AsyncSession,
         role: Optional[str] = None,
 ) -> List[Product] :

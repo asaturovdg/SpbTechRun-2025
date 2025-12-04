@@ -32,6 +32,8 @@ class ProductBase(BaseModel):
     product_role: str
     
     embedding: Optional[NDArray[Shape["1024"], np.float32]]
+    expert_embedding: Optional[NDArray[Shape["1024"], np.float32]]
+    expert_reason: Optional[str]
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -40,13 +42,7 @@ class ProductCreate(ProductBase):
     pass
 
 
-class ProductRead(ProductBase):
-    id: int
-
-    model_config = {"from_attributes": True}
-
-
-class ProductRecommendation(BaseModel):
+class ProductRead(BaseModel):
     """
     Product schema for recommendation results (new)
     """
@@ -74,7 +70,7 @@ class RecommendationRead(BaseModel):
     similarity_score: float
     created_at: Optional[str] = None  
 
-    recommended_product: ProductRecommendation  
+    recommended_product: ProductRead
 
     model_config = {"from_attributes": True}
 

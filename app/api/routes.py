@@ -1,5 +1,8 @@
 from typing import List
 
+from ..config.config import settings
+import requests
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -73,7 +76,17 @@ async def get_main_products_view(
     """
     Возвращает список всех основных товаров из БД.
     
-    Фильтрует продукты по роли "основной товар" из поля raw_attributes->product_role.
+    Фильтрует продукты по роли "основной товар" из поля product_role.
     """
     products = await get_products_by_role(db, role="основной товар")
     return [ProductRead.model_validate(product) for product in products]
+
+
+@router.get(
+    "/check-ollama",
+    summary="Проверить модели ollama"
+)
+async def check_ollama():
+    response = requests.get(f"{settings.ollama_url}/api/tags")
+    response.raise_for_status()
+    return response.json()

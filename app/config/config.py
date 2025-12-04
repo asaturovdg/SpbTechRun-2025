@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     DB_DB: str = Field(..., env="DB_DB")
     DB_ECHO: bool = Field(False, env="DB_ECHO")
 
+    OLLAMA_HOST: str = Field(..., env="OLLAMA_HOST")
+    OLLAMA_PORT: str = Field(..., env="OLLAMA_PORT")
+
     @property
     def database_url_async(self) -> str:
         return (
@@ -22,6 +25,10 @@ class Settings(BaseSettings):
             f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}"
             f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_DB}"
         )
+
+    @property
+    def ollama_url(self) -> str:
+        return f"http://{self.OLLAMA_HOST}:{self.OLLAMA_PORT}"
 
     @property
     def database_echo(self) -> bool:
