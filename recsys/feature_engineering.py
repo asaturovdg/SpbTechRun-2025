@@ -13,6 +13,7 @@ from collections import defaultdict
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from app.config.config import settings
@@ -205,21 +206,27 @@ def get_physical_dimension(row):
 
 
 def create_embedding_prompt(row):
-    """Combine all fields to generate embedding prompt"""
+    """
+    Combine fields to generate embedding prompt
+    
+    Order by importance:
+    1. name (core identifier)
+    2. category (semantic context)
+    3. key_params (product attributes)
+    4. physical dimensions (semantic feature for materials)
+    5. description (truncated to avoid dominating)
+    6. vendor (last, lower weight)
+    """
     parts = []
     
     if row.get('name_clean'):
         parts.append(row['name_clean'])
-    
-    if row.get('vendor'):
-        parts.append(str(row['vendor']))
-    
+
+
     if row.get('category_breadcrumb'):
-        parts.append(row['category_breadcrumb'])
+        parts.append(f"Категория: {row['category_breadcrumb']}")
     
-    if row.get('price_formatted'):
-        parts.append(f"Price: {row['price_formatted']}")
-    
+  
     if row.get('key_params_clean'):
         parts.append(row['key_params_clean'])
     
@@ -230,9 +237,12 @@ def create_embedding_prompt(row):
     if row.get('description'):
         desc = re.sub(r'\s+', ' ', str(row['description']).strip())
         if desc:
-            parts.append(desc)
+            parts.append(desc[:200])
     
-    return " | ".join(parts)
+    if row.get('vendor'):
+        parts.append(f"Бренд: {row['vendor']}")
+    
+    return ". ".join(parts)
 
 
 
