@@ -11,6 +11,20 @@ class Settings(BaseSettings):
 
     OLLAMA_HOST: str = Field(..., env="OLLAMA_HOST")
     OLLAMA_PORT: str = Field(..., env="OLLAMA_PORT")
+    
+    # Demo mode for presentation - amplifies learning effects
+    DEMO_MODE: bool = Field(True, env="DEMO_MODE")
+    
+    # Thompson Sampling parameters (can be overridden via env)
+    TS_INIT_STRENGTH: float = Field(4.0, env="TS_INIT_STRENGTH")       # How much similarity affects initial prior
+    TS_UPDATE_STRENGTH_DEMO: float = Field(10.0, env="TS_UPDATE_STRENGTH_DEMO")  # Update strength in demo mode (visible effect)
+    TS_UPDATE_STRENGTH_NORMAL: float = Field(1.0, env="TS_UPDATE_STRENGTH_NORMAL")  # Update strength in normal mode
+    TS_MAX_TOTAL: float = Field(100.0, env="TS_MAX_TOTAL")             # Cap on alpha + beta
+    
+    @property
+    def ts_update_strength(self) -> float:
+        """Get update strength based on DEMO_MODE"""
+        return self.TS_UPDATE_STRENGTH_DEMO if self.DEMO_MODE else self.TS_UPDATE_STRENGTH_NORMAL
 
     @property
     def database_url_async(self) -> str:

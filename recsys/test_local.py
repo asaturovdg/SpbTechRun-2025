@@ -5,7 +5,7 @@ Tests:
 - Database connection
 - Product loading
 - Vector similarity search
-- Thompson Sampling feedback
+- Thompson Sampling feedback (DEMO_MODE)
 - Price factor penalty
 - Stable candidate filling
 
@@ -19,12 +19,16 @@ os.environ["DB_PORT"] = "5433"  # Using 5433 because 5432 is used by local postg
 os.environ["DB_USER"] = "postgres"
 os.environ["DB_PASSWORD"] = "postgres"
 os.environ["DB_DB"] = "recsys"
+os.environ["OLLAMA_HOST"] = "localhost"
+os.environ["OLLAMA_PORT"] = "11434"
 
 # Add project root directory
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-# Import the recommender engine
+# Import settings and recommender
+from app.config.config import settings
 from recsys.recommender import RecommendationEngine
+from recsys import get_recommender
 
 
 def test_database_connection(engine):
@@ -41,6 +45,13 @@ def test_database_connection(engine):
     print(f"   Total products: {len(all_products)}")
     print(f"   Main products: {len(main_products)}")
     print(f"   Accessory products: {len(accessory_products)}")
+    
+    # Show DEMO_MODE configuration
+    print(f"\n⚙️ Thompson Sampling Configuration:")
+    print(f"   DEMO_MODE: {settings.DEMO_MODE}")
+    print(f"   Update strength: {settings.ts_update_strength}")
+    print(f"   Init strength: {settings.TS_INIT_STRENGTH}")
+    print(f"   Max total (α+β): {settings.TS_MAX_TOTAL}")
     
     # Show sample product structure
     if all_products:
@@ -82,9 +93,11 @@ def test_recommendations(engine, main_products):
 
 
 def test_thompson_sampling(engine, test_product, recs):
-    """Test Thompson Sampling feedback mechanism"""
+    """Test Thompson Sampling feedback mechanism (DEMO_MODE aware)"""
     print("\n" + "=" * 60)
     print("3. Thompson Sampling Feedback Test")
+    if settings.DEMO_MODE:
+        print(f"   (DEMO_MODE: update_strength = {settings.ts_update_strength})")
     print("=" * 60)
     
     if not recs or len(recs) < 2:
@@ -96,22 +109,38 @@ def test_thompson_sampling(engine, test_product, recs):
     
     print(f"Testing feedback for items {rec_id_1} and {rec_id_2}...")
     
-    # Simulate positive feedback for first item
-    print("\n👍 5x Positive feedback for item 1:")
-    for i in range(5):
-        engine.update_model(test_product['id'], rec_id_1, True)
+    # Show initial state
+    stats1_before = engine.get_arm_stats(test_product['id'], rec_id_1)
+    stats2_before = engine.get_arm_stats(test_product['id'], rec_id_2)
+    print(f"\n📊 Initial state:")
+    print(f"   Item {rec_id_1}: α={stats1_before['alpha']:.1f}, β={stats1_before['beta']:.1f}, E[θ]={stats1_before['expected_value']:.3f}")
+    print(f"   Item {rec_id_2}: α={stats2_before['alpha']:.1f}, β={stats2_before['beta']:.1f}, E[θ]={stats2_before['expected_value']:.3f}")
     
-    # Simulate negative feedback for second item
-    print("\n👎 3x Negative feedback for item 2:")
-    for i in range(3):
-        engine.update_model(test_product['id'], rec_id_2, False)
+    # Simulate positive feedback for first item (just 1 click in DEMO mode)
+    print("\n👍 1x Positive feedback for item 1:")
+    engine.update_model(test_product['id'], rec_id_1, True)
     
-    # Show arm statistics
-    print("\n📊 Thompson Sampling Statistics:")
-    stats1 = engine.get_arm_stats(test_product['id'], rec_id_1)
-    stats2 = engine.get_arm_stats(test_product['id'], rec_id_2)
-    print(f"   Item {rec_id_1}: α={stats1['alpha']:.0f}, β={stats1['beta']:.0f}, E[θ]={stats1['expected_value']:.3f}")
-    print(f"   Item {rec_id_2}: α={stats2['alpha']:.0f}, β={stats2['beta']:.0f}, E[θ]={stats2['expected_value']:.3f}")
+    # Simulate negative feedback for second item (just 1 click)
+    print("👎 1x Negative feedback for item 2:")
+    engine.update_model(test_product['id'], rec_id_2, False)
+    
+    # Show arm statistics after feedback
+    stats1_after = engine.get_arm_stats(test_product['id'], rec_id_1)
+    stats2_after = engine.get_arm_stats(test_product['id'], rec_id_2)
+    
+    print(f"\n📊 After feedback:")
+    print(f"   Item {rec_id_1}: α={stats1_after['alpha']:.1f}, β={stats1_after['beta']:.1f}, E[θ]={stats1_after['expected_value']:.3f}")
+    print(f"   Item {rec_id_2}: α={stats2_after['alpha']:.1f}, β={stats2_after['beta']:.1f}, E[θ]={stats2_after['expected_value']:.3f}")
+    
+    # Calculate change
+    change1 = stats1_after['expected_value'] - stats1_before['expected_value']
+    change2 = stats2_after['expected_value'] - stats2_before['expected_value']
+    print(f"\n📈 E[θ] change after 1 feedback:")
+    print(f"   Item {rec_id_1}: {change1:+.3f} ({change1*100:+.1f}%)")
+    print(f"   Item {rec_id_2}: {change2:+.3f} ({change2*100:+.1f}%)")
+    
+    if settings.DEMO_MODE and (abs(change1) > 0.1 or abs(change2) > 0.1):
+        print("   ✅ DEMO_MODE working: visible change after single feedback!")
     
     # Get recommendations again to see ranking change
     print("\n🔄 Recommendations after feedback:")
@@ -226,7 +255,7 @@ if __name__ == "__main__":
     print("=" * 60)
     
     try:
-        engine = RecommendationEngine()
+        engine = get_recommender()  # Use singleton for consistency
         
         # Run all tests
         main_products, accessory_products = test_database_connection(engine)
