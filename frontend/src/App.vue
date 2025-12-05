@@ -195,7 +195,7 @@
                     </transition>
                   </div>
 
-                  <div class="rec-body-scroll">
+                  <div class="rec-body-scroll" ref="recListContainer">
                     <div v-if="recommendationsLoading" class="rec-loading-state">
                       <div class="spinner-modern sm color-accent"></div>
                     </div>
@@ -209,20 +209,46 @@
                         :class="{ 'is-selected': feedbackMap[rec.recommended_product.id] === true }"
                       >
                         <div class="rec-thumb-box">
+                          <a 
+                            v-if="rec.recommended_product.url || rec.recommended_product.link"
+                            :href="rec.recommended_product.url || rec.recommended_product.link"
+                            target="_blank"
+                            class="rec-img-link"
+                            @click.stop
+                          >
+                            <div class="external-link-hint small-hint">↗</div>
+                            <img 
+                              :src="getProductImage(rec.recommended_product)"
+                              @error="handleImageError"
+                            >
+                          </a>
                           <img 
+                            v-else
                             :src="getProductImage(rec.recommended_product)"
                             @error="handleImageError"
                           >
-                        </div>
+                          </div>
                         <div class="rec-details">
                           <div class="rec-top-row">
                             <div class="rec-name" :title="rec.recommended_product.name">
                               {{ rec.recommended_product.name }}
                             </div>
+                            
                             <div class="match-ring" :style="{ '--score': rec.similarity_score }">
-                               <span>{{ (rec.similarity_score * 100).toFixed(0) }}%</span>
+                               <div 
+                                  v-if="rec.old_score !== undefined && (rec.similarity_score * 100).toFixed(0) !== (rec.old_score * 100).toFixed(0)" 
+                                  class="score-stack"
+                               >
+                                  <span class="val-new">{{ (rec.similarity_score * 100).toFixed(0) }}</span>
+                                  <span class="val-arrow" :class="rec.similarity_score < rec.old_score ? 'text-red' : 'text-green'">
+                                      {{ rec.similarity_score < rec.old_score ? '↓' : '↑' }}
+                                  </span>
+                                  <span class="val-old">{{ (rec.old_score * 100).toFixed(0) }}</span>
+                               </div>
+                               <span v-else>{{ (rec.similarity_score * 100).toFixed(0) }}%</span>
                             </div>
-                          </div>
+                            </div>
+                          
                           <div class="rec-price-row">
                             {{ formatPrice(rec.recommended_product.price) }} ₽
                           </div>
@@ -307,6 +333,11 @@ const submitError = ref(null)
 const refreshingRecommendations = ref(false)
 
 const showBackToTop = ref(false)
+
+// Ref for scrolling
+const recListContainer = ref(null)
+// State to store previous scores
+const previousScores = ref({})
 
 // --- Filtering ---
 function switchCategory(cat) {
@@ -397,10 +428,32 @@ async function fetchRecommendations(productId) {
 async function refreshRecommendations() {
   if (!activeProduct.value) return
   refreshingRecommendations.value = true
+
+  // Snapshot current scores before fetching new ones
+  const snapshot = {}
+  if (recommendations.value && recommendations.value.length) {
+    recommendations.value.forEach(rec => {
+      snapshot[rec.recommended_product.id] = rec.similarity_score
+    })
+  }
+  previousScores.value = snapshot
+
   try {
     const res = await fetch(`/api/recommendations/${activeProduct.value.id}`)
     if (!res.ok) throw new Error(`HTTP Code: ${res.status}`)
-    recommendations.value = await res.json()
+    
+    // Handle new data and compare with snapshot
+    const newData = await res.json()
+    
+    recommendations.value = newData.map(item => {
+      const oldScore = previousScores.value[item.recommended_product.id]
+      // If we have an old score for this product, attach it to the item
+      if (oldScore !== undefined) {
+        return { ...item, old_score: oldScore }
+      }
+      return item
+    })
+
     submitSuccess.value = false
     submitError.value = null
   } catch (err) {
@@ -422,6 +475,10 @@ function openModal(product) {
   feedbackMap.value = {}
   submittingAll.value = false
   refreshingRecommendations.value = false
+  
+  // Clear previous scores when opening a new main product
+  previousScores.value = {}
+
   fetchRecommendations(product.id)
 }
 
@@ -480,6 +537,12 @@ async function submitAllFeedback() {
     if (errorCount === 0) {
       submitSuccess.value = true
       feedbackMap.value = {} 
+      
+      // Scroll to top logic
+      if (recListContainer.value) {
+        recListContainer.value.scrollTop = 0
+      }
+
       await sleep(1200)
       refreshingRecommendations.value = true
       await refreshRecommendations()
@@ -813,15 +876,60 @@ onUnmounted(() => {
   border-color: var(--color-accent); background: var(--color-accent-light);
 }
 
-.rec-thumb-box { width: 72px; height: 72px; flex-shrink: 0; background: var(--bg-secondary); border-radius: 8px; padding: 4px; }
+.rec-thumb-box { 
+  width: 72px; height: 72px; flex-shrink: 0; 
+  background: var(--bg-secondary); border-radius: 8px; padding: 4px;
+  position: relative; overflow: hidden; 
+}
+/* UPDATED: rec-thumb-box img works inside link too with hover zoom */
 .rec-thumb-box img { width: 100%; height: 100%; object-fit: contain; mix-blend-mode: multiply; }
+.rec-img-link { display: block; width: 100%; height: 100%; position: relative; }
+
+/* Hover effects for Rec List */
+.rec-img-link img { transition: transform 0.3s; }
+.rec-img-link:hover img { transform: scale(1.1); cursor: pointer; }
+.rec-img-link:hover .external-link-hint { opacity: 1; }
+
+/* Special adjustment for small rec hint */
+.rec-thumb-box .external-link-hint {
+  top: 2px; right: 2px;
+  padding: 0; width: 20px; height: 20px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px;
+}
 
 .rec-details { flex: 1; display: flex; flex-direction: column; }
 .rec-top-row { display: flex; justify-content: space-between; margin-bottom: 8px; }
 .rec-name { font-size: 0.95rem; font-weight: 600; line-height: 1.3; margin-right: 8px; }
-.match-ring { width: 36px; height: 36px; border-radius: 50%; background: conic-gradient(var(--color-accent) calc(var(--score) * 100%), #E2E8F0 0); display: flex; align-items: center; justify-content: center; position: relative; }
+
+/* UPDATED: Match Ring styles to handle both single score and vertical stack */
+.match-ring { 
+  width: 36px; height: 36px; flex-shrink: 0;
+  border-radius: 50%; 
+  background: conic-gradient(var(--color-accent) calc(var(--score) * 100%), #E2E8F0 0); 
+  display: flex; align-items: center; justify-content: center; 
+  position: relative; 
+}
 .match-ring::after { content: ''; position: absolute; inset: 3px; background: white; border-radius: 50%; }
-.match-ring span { position: relative; z-index: 1; font-size: 0.7rem; font-weight: 700; color: var(--color-accent); }
+.match-ring > span { position: relative; z-index: 1; font-size: 0.7rem; font-weight: 700; color: var(--color-accent); }
+
+/* UPDATED: Vertical stack styles */
+.score-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  position: relative;
+  z-index: 2; /* Ensure it is above the white background */
+}
+.val-new { font-size: 9px; font-weight: 800; color: var(--color-primary); line-height: 9px; }
+.val-arrow { font-size: 8px; font-weight: 800; line-height: 8px; margin: 1px 0; }
+.val-old { font-size: 8px; color: #94A3B8; font-weight: 600; line-height: 8px; }
+
+.text-green { color: #10B981; }
+.text-red { color: #EF4444; }
+
 .rec-price-row { font-weight: 800; color: var(--text-primary); margin-bottom: 12px; }
 
 .rec-actions-modern { display: flex; gap: 8px; }
