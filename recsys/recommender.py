@@ -81,16 +81,8 @@ class ThompsonSampler:
         an informed prior based on vector similarity.
         """
         if key not in self.arm_params:
-            if similarity is not None and self.demo_mode:
-                # Informed prior based on similarity
-                # High similarity -> higher alpha (more likely to be good)
-                alpha = 1.0 + similarity * self.init_strength
-                beta = 1.0 + (1.0 - similarity) * self.init_strength
-            else:
-                # Uninformed prior: Beta(1, 1) = Uniform distribution
-                alpha, beta = 1.0, 1.0
-            
-            self.arm_params[key] = (alpha, beta)
+            # Initialize new arm
+            self.initialize_from_similarity(key, similarity)
         
         return self.arm_params[key]
     
@@ -138,17 +130,22 @@ class ThompsonSampler:
             "demo_mode": self.demo_mode,
         }
     
-    def initialize_from_similarity(self, key: tuple, similarity: float) -> Tuple[float, float]:
+    def initialize_from_similarity(self, key: tuple, similarity: float = None) -> Tuple[float, float]:
         """
         Initialize arm parameters based on similarity score.
-        Call this when creating a new arm with known similarity.
+        
+        Args:
+            key: (product_id, recommended_product_id) tuple
+            similarity: Vector similarity score (0-1). If None, uses uninformed prior.
         
         Returns: (alpha, beta) for the new arm
         """
-        if self.demo_mode:
+        if similarity is not None and self.demo_mode:
+            # Informed prior based on similarity
             alpha = 1.0 + similarity * self.init_strength
             beta = 1.0 + (1.0 - similarity) * self.init_strength
         else:
+            # Uninformed prior: Beta(1, 1) = Uniform distribution
             alpha, beta = 1.0, 1.0
         
         self.arm_params[key] = (alpha, beta)
