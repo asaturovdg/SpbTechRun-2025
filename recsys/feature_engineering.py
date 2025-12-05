@@ -210,21 +210,21 @@ def create_embedding_prompt(row):
     Combine fields to generate embedding prompt
     
     Order by importance:
-    1. name (core identifier)
-    2. category (semantic context)
+    1. category (semantic context)
+    2. name (core identifier)
     3. key_params (product attributes)
     4. physical dimensions (semantic feature for materials)
     5. description (truncated to avoid dominating)
-    6. vendor (last, lower weight)
     """
     parts = []
     
-    if row.get('name_clean'):
-        parts.append(row['name_clean'])
-
 
     if row.get('category_breadcrumb'):
         parts.append(f"Категория: {row['category_breadcrumb']}")
+
+
+    if row.get('name_clean'):
+        parts.append(f"Имя: {row['name_clean']}")
     
   
     if row.get('key_params_clean'):
@@ -238,9 +238,6 @@ def create_embedding_prompt(row):
         desc = re.sub(r'\s+', ' ', str(row['description']).strip())
         if desc:
             parts.append(desc[:200])
-    
-    if row.get('vendor'):
-        parts.append(f"Бренд: {row['vendor']}")
     
     return ". ".join(parts)
 
