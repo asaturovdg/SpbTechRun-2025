@@ -86,10 +86,11 @@ RecommendationEngine (Class)
 ├── __init__(repository=None)                 - Initialize (uses singleton)
 ├── get_ranking(product_id, use_vector_search)
 │   ├── Get main product + price
-│   ├── Try vector search (pgvector)
+│   ├── Try vector search (pgvector, retrieve 60)
 │   ├── Fallback: get all accessories
-│   ├── Fill candidates if < 20 (_fill_candidates)
+│   ├── Fill candidates if < return_size (_fill_candidates)
 │   ├── Calculate scores (_calculate_scores)
+│   ├── Apply MMR for diversity (_mmr_rerank)
 │   └── Build response (_build_response)
 ├── _fill_candidates(main_id, existing, target)
 │   └── Stable filling using hash-based deterministic selection
@@ -99,7 +100,11 @@ RecommendationEngine (Class)
 │   ├── Base score: similarity / hash-based deterministic
 │   ├── Thompson weight: sample from Beta(α,β)
 │   ├── Price factor: penalty for expensive items
-│   └── Combined: (base*0.6 + thompson*0.4) * price_factor
+│   └── Combined: (base*0.8 + thompson*0.2) * price_factor
+├── _get_embedding(product_id)                - Get embedding with cache
+├── _cosine_similarity(emb1, emb2)            - Calculate cosine similarity
+├── _get_pairwise_similarity_cached(id_i, id_j) - Cached pairwise similarity
+├── _mmr_rerank(scored_candidates)            - MMR diversity reranking
 ├── _build_response(scored_candidates)        - Format to API schema
 ├── update_model(product_id, rec_id, is_relevant)
 │   └── Update Thompson Sampling parameters (memory)
@@ -109,27 +114,84 @@ RecommendationEngine (Class)
 ```
 
 ### Scoring Formula
+
+**DEMO Mode:**
 ```
-final_score = (base_score × 0.8 + thompson_weight × 0.2) × price_factor
+combined = base_score × 0.8 + thompson_weight × 0.2
+final_score = combined × price_factor
+```
+
+**Normal Mode (dynamic weights based on feedback):**
+```
+n = feedback_count for this (main, accessory) pair
+k = TS_WEIGHT_HALFLIFE (default: 10)
+gamma = n / (n + k)
+
+combined = (1 - gamma) × base_score + gamma × thompson_weight
+final_score = combined × price_factor
+
+| n  | gamma | base weight | ts weight |
+|----|-------|-------------|-----------|
+| 0  | 0.00  | 100%        | 0%        |
+| 5  | 0.33  | 67%         | 33%       |
+| 10 | 0.50  | 50%         | 50%       |
+| 20 | 0.67  | 33%         | 67%       |
+```
 
 - base_score: vector similarity (0~1) or hash-based deterministic
 - thompson_weight: sampled from Beta(α, β), range 0~1
 - price_factor: 1.0 if ratio ≤ 1.5, else penalty up to 0.7
+
+### MMR (Maximal Marginal Relevance) for Diversity
+```
+Purpose: Reduce highly similar consecutive items in recommendations
+
+Algorithm:
+1. retrieve 60 candidates (MMR_RECALL_SIZE)
+2. Sort by relevance score (final_score)
+3. Phase 1: Take top K (3) items directly
+4. Phase 2: For remaining positions, use sliding window MMR:
+   - Window = last W (5) selected items
+   - MMR score = λ × relevance - (1-λ) × max(similarity to window)
+   - Skip items with relevance < MIN_SCORE (0.2)
+5. Return top 20 (MMR_RETURN_SIZE)
+
+Parameters (configurable via .env):
+├── MMR_ENABLED         - Enable/disable MMR (default: true)
+├── MMR_RECALL_SIZE     - Candidates to retrieve (default: 60)
+├── MMR_RETURN_SIZE     - Final items to return (default: 20)
+├── MMR_PURE_TOP_K      - Items exempt from MMR (default: 3)
+├── MMR_WINDOW_SIZE     - Sliding window size (default: 5)
+├── MMR_LAMBDA          - Relevance weight (default: 0.7)
+└── MMR_MIN_SCORE       - Minimum relevance threshold (default: 0.2)
 ```
 
-### DEMO_MODE Configuration 
+### Thompson Sampling Configuration 
 ```
 Parameters (all configurable via .env):
 ├── DEMO_MODE                 - Enable demo mode (default: true)
 ├── TS_INIT_STRENGTH          - Similarity-based init strength (default: 4.0)
-├── TS_UPDATE_STRENGTH_DEMO   - Update strength in demo mode (default: 5.0)
+├── TS_UPDATE_STRENGTH_DEMO   - Update strength in demo mode (default: 10.0)
 ├── TS_UPDATE_STRENGTH_NORMAL - Update strength in normal mode (default: 1.0)
-└── TS_MAX_TOTAL              - Cap on α+β to prevent variance collapse (default: 50.0)
+├── TS_MAX_TOTAL              - Cap on α+β to prevent variance collapse (default: 100.0)
+├── TS_BASE_WEIGHT_DEMO       - Base score weight in demo mode (default: 0.6)
+└── TS_WEIGHT_HALFLIFE        - Feedback count for gamma=0.5 in normal mode (default: 10.0)
+
+Both modes use similarity-based initialization:
+  α = 1 + sim × INIT_STRENGTH
+  β = 1 + (1-sim) × INIT_STRENGTH
 
 DEMO_MODE effects:
-- Initialize new arms with informed prior: α = 1 + sim × INIT_STRENGTH
-- Amplified feedback: one click changes E[θ] by ~20% (vs ~5% in normal)
-- Cap prevents variance collapse after many feedbacks
+- scoring weights: 80% base_score + 20% thompson_weight
+- Higher INIT_STRENGTH (4.0) → stronger prior
+- Higher UPDATE_STRENGTH (10.0) → visible learning per click
+- Cap prevents variance collapse
+
+Normal mode effects:
+- Dynamic scoring weights based on feedback count
+- Lower INIT_STRENGTH (configurable) → weaker prior
+- Lower UPDATE_STRENGTH (1.0) → gradual learning
+- Gradual trust in TS as feedback accumulates
 ```
 
 ---
