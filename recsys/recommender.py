@@ -188,9 +188,14 @@ class RecommendationEngine:
         self.price_penalty_threshold = 1.5  # Penalty if accessory > 1.5x main product price
         self.price_penalty_max = 0.3  # Maximum penalty (30% reduction)
         
+        # Multi-channel retrieval parameters
+        self.vector_retrieval_size = settings.VECTOR_RETRIEVAL_SIZE
+        self.llm_retrieval_enabled = settings.LLM_RETRIEVAL_ENABLED
+        self.rrf_k = settings.RRF_K
+        
         # MMR parameters (from settings)
         self.mmr_enabled = settings.MMR_ENABLED
-        self.mmr_recall_size = settings.MMR_RECALL_SIZE
+        self.mmr_retrieval_size = settings.MMR_RETRIEVAL_SIZE
         self.mmr_return_size = settings.MMR_RETURN_SIZE
         self.mmr_pure_top_k = settings.MMR_PURE_TOP_K
         self.mmr_window_size = settings.MMR_WINDOW_SIZE
@@ -203,12 +208,18 @@ class RecommendationEngine:
         self.ts_weight_halflife = settings.TS_WEIGHT_HALFLIFE    # Halflife for dynamic weight
         
         logger.info(f"RecommendationEngine initialized: MMR={'ON' if self.mmr_enabled else 'OFF'}, "
+                   f"LLM_RETRIEVAL={'ON' if self.llm_retrieval_enabled else 'OFF'}, "
                    f"DEMO={'ON' if self.demo_mode else 'OFF'}")
     
     def get_ranking(self, product_id: int, use_vector_search: bool = True) -> List[Dict]:
         """
-        Get recommendation list
-        Swagger API: GET /recommendations/{product_id}
+        Get recommendation list using multi-channel retrieval + RRF fusion.
+        
+        Pipeline:
+        1. Multi-channel retrieval (Vector + LLM)
+        2. RRF fusion to compute base_score
+        3. Thompson Sampling + Price factor scoring
+        4. MMR reranking for diversity
         
         Args:
             product_id: Main product ID
@@ -230,35 +241,53 @@ class RecommendationEngine:
         # Get main product price for comparison
         main_price = main_product.get('price', 0) or 0
         
-        # Get candidates (recall more for MMR)
-        candidates = []
-        search_method = "none"
-        recall_size = self.mmr_recall_size if self.mmr_enabled else self.mmr_return_size
+        # ========== Multi-channel Retrieval ==========
+        vector_candidates = []
+        llm_candidates = []
         
+        # Channel 1: Vector similarity search
         if use_vector_search:
-            # vector similarity search
             try:
-                similar_products = self.repo.get_similar_products_by_vector(
-                    product_id, limit=recall_size
+                vector_candidates = self.repo.get_similar_products_by_vector(
+                    product_id, limit=self.vector_retrieval_size
                 )
-                if similar_products:
-                    candidates = similar_products
-                    search_method = "vector"
-                    logger.debug(f"Vector search returned {len(candidates)} candidates")
+                for i, c in enumerate(vector_candidates):
+                    c['_vector_rank'] = i + 1
+                    c['_source'] = 'vector'
+                logger.debug(f"Vector retrieval: {len(vector_candidates)} candidates")
             except Exception as e:
                 logger.error(f"Vector search failed: {e}")
         
-        # Fallback: get all accessories if vector search failed
+        # Channel 2: LLM-based retrieval
+        if self.llm_retrieval_enabled:
+            try:
+                llm_candidates = self.repo.get_llm_recommendations(product_id)
+                for i, c in enumerate(llm_candidates):
+                    c['_llm_rank'] = i + 1
+                logger.debug(f"LLM retrieval: {len(llm_candidates)} candidates")
+            except Exception as e:
+                logger.debug(f"LLM retrieval not available: {e}")
+        
+        # ========== UNION + RRF Fusion ==========
+        candidates, retrieval_stats = self._merge_and_fuse(
+            vector_candidates, 
+            llm_candidates,
+            main_product['id']
+        )
+        
+        # Fallback: get all accessories if no candidates
         if not candidates:
             candidates = self.repo.get_accessory_products()
             candidates = [c for c in candidates if c['id'] != main_product['id']]
-            search_method = "fallback"
+            for c in candidates:
+                c['_rrf_score'] = 0.5  # Default score for fallback
+            retrieval_stats = {'vector': 0, 'llm': 0, 'union': len(candidates), 'method': 'fallback'}
         
         if not candidates:
             logger.warning(f"No candidates for product {main_product['name']}")
             return []
         
-        # Fill candidates if less than minimum (stable, deterministic)
+        # Fill candidates if less than minimum (rarely needed now)
         if len(candidates) < self.mmr_return_size:
             candidates = self._fill_candidates(
                 main_product_id=main_product['id'],
@@ -266,31 +295,103 @@ class RecommendationEngine:
                 target_count=self.mmr_return_size
             )
         
-        # Calculate scores with Thompson Sampling and price factor
+        # ========== Scoring (TS + Price) ==========
         scored_candidates = self._calculate_scores(
             main_product_id=main_product['id'],
             main_price=main_price,
             candidates=candidates,
-            search_method=search_method
+            search_method="multi_channel"
         )
         
         # Sort by score (descending)
         scored_candidates.sort(key=lambda x: x['score'], reverse=True)
         
-        # Apply MMR for diversity
+        # ========== MMR Reranking ==========
         if self.mmr_enabled and len(scored_candidates) > self.mmr_return_size:
             scored_candidates = self._mmr_rerank(scored_candidates)
-            logger.debug(f"MMR reranking: {len(candidates)} -> {len(scored_candidates)}")
+            logger.debug(f"MMR reranking -> {len(scored_candidates)} items")
         else:
-            # Just take top N
             scored_candidates = scored_candidates[:self.mmr_return_size]
         
         # Build response
         result = self._build_response(scored_candidates)
         
-        logger.info(f"Product {product_id} ({search_method}) -> {len(result)} recommendations"
-                   f"{' [MMR]' if self.mmr_enabled else ''}")
+        logger.info(f"Product {product_id}: Vector={retrieval_stats.get('vector', 0)}, "
+                   f"LLM={retrieval_stats.get('llm', 0)}, UNION={retrieval_stats.get('union', 0)} "
+                   f"-> {len(result)} recommendations")
         return result
+    
+    def _merge_and_fuse(
+        self,
+        vector_candidates: List[Dict],
+        llm_candidates: List[Dict],
+        main_product_id: int
+    ) -> Tuple[List[Dict], Dict]:
+        """
+        Merge candidates from multiple channels and compute RRF scores.
+        
+        RRF formula: score = sum(1 / (k + rank)) for each channel
+        
+        Returns:
+            (merged_candidates, retrieval_stats)
+        """
+        # Build candidate map for deduplication
+        candidate_map: Dict[int, Dict] = {}
+        
+        # Add vector candidates
+        for c in vector_candidates:
+            cid = c['id']
+            if cid not in candidate_map:
+                candidate_map[cid] = c.copy()
+                candidate_map[cid]['_vector_rank'] = c.get('_vector_rank')
+                candidate_map[cid]['_llm_rank'] = None
+            else:
+                candidate_map[cid]['_vector_rank'] = c.get('_vector_rank')
+        
+        # Add LLM candidates (merge if exists)
+        for c in llm_candidates:
+            cid = c['id']
+            if cid not in candidate_map:
+                candidate_map[cid] = c.copy()
+                candidate_map[cid]['_vector_rank'] = None
+                candidate_map[cid]['_llm_rank'] = c.get('_llm_rank')
+            else:
+                candidate_map[cid]['_llm_rank'] = c.get('_llm_rank')
+                # Keep LLM match score if available
+                if c.get('llm_match_score'):
+                    candidate_map[cid]['llm_match_score'] = c['llm_match_score']
+        
+        # Compute RRF scores
+        k = self.rrf_k
+        max_rrf = 2.0 / (k + 1)  # Maximum possible (rank 1 in both channels)
+        
+        for cid, c in candidate_map.items():
+            rrf_score = 0.0
+            
+            # Vector channel contribution
+            if c.get('_vector_rank') is not None:
+                rrf_score += 1.0 / (k + c['_vector_rank'])
+            
+            # LLM channel contribution
+            if c.get('_llm_rank') is not None:
+                rrf_score += 1.0 / (k + c['_llm_rank'])
+            
+            # Normalize to [0, 1]
+            c['_rrf_score'] = rrf_score / max_rrf if max_rrf > 0 else 0.0
+        
+        # Convert to list
+        candidates = list(candidate_map.values())
+        
+        # Stats
+        retrieval_stats = {
+            'vector': len(vector_candidates),
+            'llm': len(llm_candidates),
+            'union': len(candidates),
+            'overlap': len(vector_candidates) + len(llm_candidates) - len(candidates),
+            'method': 'multi_channel'
+        }
+        
+        return candidates, retrieval_stats
     
     def _fill_candidates(
         self, 
@@ -467,6 +568,11 @@ class RecommendationEngine:
         """
         Calculate final scores for candidates.
         
+        Base score sources (in priority order):
+        1. RRF fusion score (multi-channel RETRIEVAL)
+        2. Vector similarity (single-channel)
+        3. Deterministic hash-based (fallback/fill)
+        
         DEMO_MODE: Fixed weights for visible learning effects
             combined = base_score * 0.8 + thompson_weight * 0.2
         
@@ -479,15 +585,22 @@ class RecommendationEngine:
         scored = []
         
         for item in candidates:
-            # Base score (from vector similarity or deterministic)
-            if search_method == "vector" and 'similarity' in item:
+            # Base score (priority: RRF > vector similarity > hash-based)
+            if '_rrf_score' in item:
+                # Multi-channel RETRIEVAL: use RRF fusion score
+                base_score = item['_rrf_score']
+                # For TS init, prefer vector similarity if available
+                similarity_for_init = item.get('similarity', base_score)
+            elif 'similarity' in item:
+                # Single-channel vector RETRIEVAL
                 base_score = item['similarity']
-                similarity_for_init = item['similarity']  # Use for TS initialization
+                similarity_for_init = item['similarity']
             elif item.get('_is_fill'):
                 # Filled candidates get lower, deterministic score
                 base_score = 0.3 + (hash(item['id']) % 1000) / 5000.0  # 0.3~0.5
-                similarity_for_init = 0.3  # Low similarity for filled items
+                similarity_for_init = 0.3
             else:
+                # Fallback
                 base_score = 0.1 + (hash(item['id']) % 1000) / 5000.0 
                 similarity_for_init = 0.1  
             

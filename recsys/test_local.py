@@ -23,6 +23,9 @@ os.environ["DB_DB"] = "recsys"
 os.environ["OLLAMA_HOST"] = "localhost"
 os.environ["OLLAMA_PORT"] = "11434"
 os.environ["MMR_ENABLED"] = "True"
+os.environ["LLM_RETRIEVAL_ENABLED"] = "True"
+os.environ["VECTOR_RETRIEVAL_SIZE"] = "40"
+os.environ["RRF_K"] = "60"
 
 # Add project root directory
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -59,10 +62,16 @@ def test_database_connection(engine):
     else:
         print(f"   Weight halflife: {settings.TS_WEIGHT_HALFLIFE} (gamma=0.5 at n={settings.TS_WEIGHT_HALFLIFE})")
     
+    # Show Multi-channel Retrieval configuration
+    print(f"\n🔄 Multi-Channel Retrieval Configuration:")
+    print(f"   Vector retrieval size: {settings.VECTOR_RETRIEVAL_SIZE}")
+    print(f"   LLM retrieval enabled: {settings.LLM_RETRIEVAL_ENABLED}")
+    print(f"   RRF k parameter: {settings.RRF_K}")
+    
     # Show MMR configuration
     print(f"\n🔀 MMR (Diversity) Configuration:")
     print(f"   MMR Enabled: {settings.MMR_ENABLED}")
-    print(f"   Recall size: {settings.MMR_RECALL_SIZE}")
+    print(f"   Expected UNION size: {settings.MMR_RECALL_SIZE}")
     print(f"   Return size: {settings.MMR_RETURN_SIZE}")
     print(f"   Pure top K: {settings.MMR_PURE_TOP_K}")
     print(f"   Window size: {settings.MMR_WINDOW_SIZE}")
@@ -167,10 +176,10 @@ def test_thompson_sampling(engine, test_product, recs):
         print(f"   {marker} {i+1}. {prod['name'][:40]}... | Score: {rec['similarity_score']:.3f}")
 
 
-def test_recall_counts(engine, main_products):
-    """Test how many candidates can be recalled for each main product"""
+def test_retrieval_counts(engine, main_products):
+    """Test multi-channel retrieval counts for each main product"""
     print("\n" + "=" * 60)
-    print("4. Recall Count Test (Vector Search)")
+    print("4. Multi-Channel Retrieval Test (Vector + LLM)")
     print("=" * 60)
     
     if not main_products:
@@ -183,62 +192,90 @@ def test_recall_counts(engine, main_products):
     accessories_with_embeddings = [p for p in products_with_embeddings 
                                    if p.get('product_role') == 'сопутка']
     
-    recall_size = settings.MMR_RECALL_SIZE
+    vector_retrieval_size = settings.VECTOR_RETRIEVAL_SIZE
     return_size = settings.MMR_RETURN_SIZE
+    llm_enabled = settings.LLM_RETRIEVAL_ENABLED
     
-    print(f"📊 Embedding Statistics:")
+    print(f"📊 Configuration:")
+    print(f"   Vector retrieval size: {vector_retrieval_size}")
+    print(f"   LLM retrieval enabled: {llm_enabled}")
+    print(f"   Final return size: {return_size}")
+    print(f"   RRF k parameter: {settings.RRF_K}")
+    
+    print(f"\n📊 Embedding Statistics:")
     print(f"   Total products with embeddings: {len(products_with_embeddings)}")
     print(f"   Accessories with embeddings: {len(accessories_with_embeddings)}")
     print(f"   Total accessories: {len(all_accessories)}")
-    print(f"   MMR recall size: {recall_size}, return size: {return_size}")
     
-    # Test recall for first few main products
+    # Test retrieval for first few main products
     test_count = min(5, len(main_products))
-    print(f"\n🔍 Testing vector search recall for {test_count} main products:")
+    print(f"\n🔍 Testing multi-channel retrieval for {test_count} main products:")
     
-    recall_stats = []
+    retrieval_stats = []
     for i, product in enumerate(main_products[:test_count]):
-        # Test vector search with MMR recall size
+        # Channel 1: Vector search
         try:
             vector_results = engine.repo.get_similar_products_by_vector(
-                product['id'], limit=recall_size
+                product['id'], limit=vector_retrieval_size
             )
             vector_count = len(vector_results)
         except Exception as e:
             vector_count = 0
-            print(f"   ⚠️ Vector search failed for product {product['id']}: {e}")
         
-        # Test full recommendation (with MMR and filling)
+        # Channel 2: LLM retrieval
+        try:
+            llm_results = engine.repo.get_llm_recommendations(product['id'])
+            llm_count = len(llm_results)
+        except Exception as e:
+            llm_count = 0
+        
+        # Calculate UNION (simulate)
+        vector_ids = {r['id'] for r in vector_results} if vector_results else set()
+        llm_ids = {r['id'] for r in llm_results} if llm_results else set()
+        union_ids = vector_ids | llm_ids
+        overlap = len(vector_ids & llm_ids)
+        
+        # Test full recommendation
         full_recs = engine.get_ranking(product['id'], use_vector_search=True)
         full_count = len(full_recs)
         
-        recall_stats.append({
+        retrieval_stats.append({
             'id': product['id'],
-            'name': product['name'][:30],
+            'name': product['name'][:25],
             'vector_count': vector_count,
+            'llm_count': llm_count,
+            'union_count': len(union_ids),
+            'overlap': overlap,
             'full_count': full_count
         })
         
-        # Status based on whether we can recall enough for MMR
-        status = "✅" if vector_count >= recall_size else ("⚠️" if vector_count >= return_size else "❌")
-        print(f"   {status} Product {product['id']}: Vector={vector_count}, Final={full_count}")
+        # Status
+        union_count = len(union_ids)
+        status = "✅" if union_count >= 40 else ("⚠️" if union_count >= return_size else "❌")
+        print(f"   {status} Product {product['id']}: Vector={vector_count}, LLM={llm_count}, "
+              f"UNION={union_count} (overlap={overlap}), Final={full_count}")
     
     # Summary
-    avg_vector = sum(s['vector_count'] for s in recall_stats) / len(recall_stats)
-    min_vector = min(s['vector_count'] for s in recall_stats)
-    max_vector = max(s['vector_count'] for s in recall_stats)
-    
     print(f"\n📈 Summary:")
-    print(f"   Vector recall: min={min_vector}, max={max_vector}, avg={avg_vector:.1f}")
+    avg_vector = sum(s['vector_count'] for s in retrieval_stats) / len(retrieval_stats)
+    avg_llm = sum(s['llm_count'] for s in retrieval_stats) / len(retrieval_stats)
+    avg_union = sum(s['union_count'] for s in retrieval_stats) / len(retrieval_stats)
+    avg_overlap = sum(s['overlap'] for s in retrieval_stats) / len(retrieval_stats)
     
-    if avg_vector >= recall_size:
-        print(f"   ✅ Vector search returns enough for MMR (≥{recall_size})")
-    elif avg_vector >= return_size:
-        print(f"   ⚠️ Vector search returns enough to fill ({return_size}-{recall_size})")
-        print(f"   → MMR will work but with less diversity choice")
+    print(f"   Vector retrieval avg: {avg_vector:.1f}")
+    print(f"   LLM retrieval avg: {avg_llm:.1f}")
+    print(f"   UNION avg: {avg_union:.1f}")
+    print(f"   Overlap avg: {avg_overlap:.1f}")
+    
+    if avg_union >= 40:
+        print(f"   ✅ Multi-channel retrieval provides good candidate pool (≥40)")
+    elif avg_union >= return_size:
+        print(f"   ⚠️ Candidate pool sufficient but limited ({return_size}-40)")
     else:
-        print(f"   ❌ Vector search returns few candidates (<{return_size})")
-        print("   → Need to generate more embeddings!")
+        print(f"   ❌ Candidate pool too small (<{return_size})")
+        
+    if avg_llm == 0:
+        print(f"   ℹ️ LLM retrieval returned 0 - table may not exist yet")
 
 
 def test_stability(engine, main_products):
@@ -545,7 +582,7 @@ if __name__ == "__main__":
             recs, test_product = result
             test_thompson_sampling(engine, test_product, recs)
         
-        test_recall_counts(engine, main_products)
+        test_retrieval_counts(engine, main_products)
         test_stability(engine, main_products)
         test_mmr_comparison(engine, main_products)  # A/B test
         test_mmr_diversity(engine, main_products)

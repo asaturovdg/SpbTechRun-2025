@@ -8,15 +8,50 @@ recsys/
 ├── recommender.py            - Recommendation engine (algorithm logic)
 ├── feature_engineering.py    - Feature cleaning pipeline
 ├── embedding_generation.py   - Embedding generation 
+├── llm_recall_processor.py   - LLM recommendations processing (offline)
 ├── auto_preprocess.py        - Docker entry point (model check + pipelines)
 ├── test_local.py             - Local testing script
 ├── __init__.py               - Module exports
-└── temp/                     - Temporary files (CSV outputs)
+└── temp/                     - Temporary files (CSV outputs, LLM JSON)
 ```
 
 ---
 
-## Pipeline Flow
+## Recommendation Pipeline (Online)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  1. Multi-Channel Retrieval                                     │
+│     ┌──────────────────┐    ┌──────────────────┐                │
+│     │ Vector Retrieval │    │  LLM Retrieval   │                │
+│     │  (pgvector, 40)  │    │  (pre-computed)  │                │
+│     └────────┬─────────┘    └────────┬─────────┘                │
+│              └──────────┬────────────┘                          │
+│                         ↓                                       │
+│              ┌──────────────────────┐                           │
+│              │  UNION + RRF Fusion  │  → base_score             │
+│              │     (~50-60 items)   │                           │
+│              └──────────────────────┘                           │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  2. Scoring (Thompson Sampling + Price Factor)                  │
+│     final_score = f(base_score, TS, price_factor)               │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  3. MMR Reranking (Diversity)                                   │
+│     Select 20 diverse items from ~50-60 candidates              │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+                    ┌──────────────┐
+                    │  返回 Top-20  │
+                    └──────────────┘
+```
+
+---
+
+## Data Preparation Pipeline (Offline)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -35,10 +70,11 @@ recsys/
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│  3. recommender.py (API)                                        │
-│     - Vector similarity search (pgvector)                       │
-│     - feedback using Thompson Sampling                          │
-│     - Apply feedback weights                                    │
+│  3. llm_recall_processor.py (New!)                              │
+│     - Read LLM recommendations JSON                             │
+│     - Compute embeddings for recommendation texts               │
+│     - Match to real SKUs via vector similarity                  │
+│     - Save to llm_recommendations table                         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -59,7 +95,8 @@ ProductRepository (Class)
 ├── get_products_by_category(name/id)         - Filter by category
 ├── get_candidates(type, exclude_id)          - Get candidate products
 ├── get_products_with_embeddings()            - Get products with vectors
-└── get_similar_products_by_vector(id, limit) - pgvector similarity search
+├── get_similar_products_by_vector(id, limit) - pgvector similarity search
+└── get_llm_recommendations(product_id)       - Get LLM-based recommendations
 
 get_repository()                              - Singleton accessor
 ```
@@ -86,24 +123,26 @@ RecommendationEngine (Class)
 ├── __init__(repository=None)                 - Initialize (uses singleton)
 ├── get_ranking(product_id, use_vector_search)
 │   ├── Get main product + price
-│   ├── Try vector search (pgvector, retrieve 60)
-│   ├── Fallback: get all accessories
+│   ├── Multi-channel retrieval (Vector + LLM)
+│   ├── Merge + RRF fusion (_merge_and_fuse)
+│   ├── Fallback if no candidates
 │   ├── Fill candidates if < return_size (_fill_candidates)
 │   ├── Calculate scores (_calculate_scores)
 │   ├── Apply MMR for diversity (_mmr_rerank)
 │   └── Build response (_build_response)
+├── _merge_and_fuse(vector_cands, llm_cands, main_id)
+│   ├── UNION deduplication
+│   └── RRF score: sum(1/(k+rank)) for each channel
 ├── _fill_candidates(main_id, existing, target)
 │   └── Stable filling using hash-based deterministic selection
 ├── _calculate_price_factor(main_price, candidate_price)
 │   └── Penalize accessories > 1.5x main price (up to 30%)
 ├── _calculate_scores(main_id, main_price, candidates, method)
-│   ├── Base score: similarity / hash-based deterministic
+│   ├── Base score: RRF / similarity / hash-based
 │   ├── Thompson weight: sample from Beta(α,β)
 │   ├── Price factor: penalty for expensive items
-│   └── Combined: (base*0.8 + thompson*0.2) * price_factor
-├── _get_embedding(product_id)                - Get embedding with cache
-├── _cosine_similarity(emb1, emb2)            - Calculate cosine similarity
-├── _get_pairwise_similarity_cached(id_i, id_j) - Cached pairwise similarity
+│   └── Combined: weighted by mode
+├── _get_pairwise_similarity(id_i, id_j)      - Cached pairwise similarity
 ├── _mmr_rerank(scored_candidates)            - MMR diversity reranking
 ├── _build_response(scored_candidates)        - Format to API schema
 ├── update_model(product_id, rec_id, is_relevant)
@@ -111,6 +150,33 @@ RecommendationEngine (Class)
 ├── get_arm_stats(product_id, rec_id)         - Get arm statistics
 ├── reload_data()                             - Reload products from database
 └── reload_arm_stats()                        - Reload arm_stats from database
+```
+
+### Multi-Channel Retrieval + RRF Fusion
+
+```
+┌─────────────────┐    ┌─────────────────┐
+│Vector Retrieval │    │  LLM Retrieval  │
+│   (40 items)    │    │   (~30 items)   │
+└───────┬─────────┘    └───────┬─────────┘
+        │    rank_vector       │    rank_llm
+        └──────────┬───────────┘
+                   ↓
+         ┌─────────────────┐
+         │  UNION (~50-60) │
+         └────────┬────────┘
+                  ↓
+         ┌─────────────────┐
+         │   RRF Fusion    │
+         │                 │
+         │  rrf_score =    │
+         │  1/(k+rank_v) + │
+         │  1/(k+rank_l)   │
+         │                 │
+         │  k = 60 (default)│
+         └────────┬────────┘
+                  ↓
+            base_score
 ```
 
 ### Scoring Formula
@@ -138,16 +204,24 @@ final_score = combined × price_factor
 | 20 | 0.67  | 33%         | 67%       |
 ```
 
-- base_score: vector similarity (0~1) or hash-based deterministic
+- base_score: RRF fusion score (multi-channel) or vector similarity (single-channel)
 - thompson_weight: sampled from Beta(α, β), range 0~1
 - price_factor: 1.0 if ratio ≤ 1.5, else penalty up to 0.7
+
+### Multi-Channel Retrieval Configuration
+```
+Parameters (configurable via .env):
+├── VECTOR_RETRIEVAL_SIZE  - Vector channel retrieval count (default: 40)
+├── LLM_RETRIEVAL_ENABLED  - Enable LLM retrieval channel (default: true)
+└── RRF_K                  - RRF fusion parameter k (default: 60)
+```
 
 ### MMR (Maximal Marginal Relevance) for Diversity
 ```
 Purpose: Reduce highly similar consecutive items in recommendations
 
 Algorithm:
-1. retrieve 60 candidates (MMR_RECALL_SIZE)
+1. After multi-channel retrieval + RRF fusion (~50-60 candidates)
 2. Sort by relevance score (final_score)
 3. Phase 1: Take top K (3) items directly
 4. Phase 2: For remaining positions, use sliding window MMR:
@@ -158,7 +232,7 @@ Algorithm:
 
 Parameters (configurable via .env):
 ├── MMR_ENABLED         - Enable/disable MMR (default: true)
-├── MMR_RECALL_SIZE     - Candidates to retrieve (default: 60)
+├── MMR_RECALL_SIZE     - Expected candidates after UNION (default: 60)
 ├── MMR_RETURN_SIZE     - Final items to return (default: 20)
 ├── MMR_PURE_TOP_K      - Items exempt from MMR (default: 3)
 ├── MMR_WINDOW_SIZE     - Sliding window size (default: 5)
@@ -278,5 +352,16 @@ arm_stats:                    -- Thompson Sampling parameters
   - beta (default 1.0)        -- Failure count + 1
   - updated_at                -- Last update timestamp
   - UNIQUE(product_id, recommended_product_id)
+
+llm_recommendations:          -- LLM-based recommendation mapping (offline computed)
+  - id (PK)
+  - main_product_id (FK)      -- Main product
+  - rec_text (TEXT)           -- Original LLM recommendation text
+  - rec_rank (INT)            -- LLM output order (1..N)
+  - matched_product_id (FK)   -- Matched real SKU
+  - match_score (FLOAT)       -- Embedding similarity score
+  - resolved_rank (INT)       -- Rank among matches for same rec_text (1=best)
+  - created_at                -- Timestamp
+  - UNIQUE(main_product_id, rec_text, resolved_rank)
 ```
 

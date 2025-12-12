@@ -25,9 +25,14 @@ class Settings(BaseSettings):
     TS_BASE_WEIGHT_DEMO: float = Field(0.8, env="TS_BASE_WEIGHT_DEMO")     # Base score weight in DEMO mode 
     TS_WEIGHT_HALFLIFE: float = Field(10.0, env="TS_WEIGHT_HALFLIFE")      # Feedback count for gamma=0.5 (normal mode)
     
+    # Multi-channel retrieval parameters
+    VECTOR_RETRIEVAL_SIZE: int = Field(40, env="VECTOR_RETRIEVAL_SIZE")     # Vector search retrieval count
+    LLM_RETRIEVAL_ENABLED: bool = Field(True, env="LLM_RETRIEVAL_ENABLED")  # Enable LLM retrieval channel
+    RRF_K: int = Field(60, env="RRF_K")                               # RRF fusion parameter k
+    
     # MMR (Maximal Marginal Relevance) parameters for diversity
     MMR_ENABLED: bool = Field(True, env="MMR_ENABLED")                 # Enable MMR reranking
-    MMR_RECALL_SIZE: int = Field(60, env="MMR_RECALL_SIZE")           # Number of candidates to retrieve before MMR
+    MMR_RETRIEVAL_SIZE: int = Field(60, env="MMR_RETRIEVAL_SIZE")           # Expected candidates after UNION (for reference)
     MMR_RETURN_SIZE: int = Field(20, env="MMR_RETURN_SIZE")           # Number of items to return after MMR
     MMR_PURE_TOP_K: int = Field(3, env="MMR_PURE_TOP_K")              # Top K items exempt from MMR
     MMR_WINDOW_SIZE: int = Field(5, env="MMR_WINDOW_SIZE")            # Sliding window size for diversity check
@@ -70,6 +75,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
+        extra = "ignore"
 
 
 settings = Settings()
