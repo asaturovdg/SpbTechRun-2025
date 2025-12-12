@@ -2,21 +2,20 @@
 Recommendation Engine - Algorithm logic
 
 """
+import logging
 import numpy as np
 from datetime import datetime
+from functools import lru_cache
 from typing import List, Dict, Tuple
 
-from sqlalchemy import  text
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .db_repository import get_repository, ProductRepository
+from app.config.config import settings
 
-# Import settings for DEMO_MODE
-try:
-    from app.config.config import settings
-    DEMO_MODE = settings.DEMO_MODE
-except:
-    DEMO_MODE = True  # Default to demo mode if settings unavailable
+# Configure logging
+logger = logging.getLogger(__name__)
 
 
 class ThompsonSampler: 
@@ -28,7 +27,7 @@ class ThompsonSampler:
     - Amplified update strength for visible learning effects
     - Cap on total to prevent variance collapse
     
-    All parameters are read from settings (app/config/config.py)
+    All parameters are read from settings (app/config/config.py) (parameters can be overridden in .env)
     """
     
     def __init__(self, engine=None):
@@ -36,25 +35,17 @@ class ThompsonSampler:
         # value: (alpha, beta) - Beta distribution parameters
         self.arm_params: Dict[tuple, Tuple[float, float]] = {}
         self.engine = engine
-        self.demo_mode = DEMO_MODE
-        
-        # Read parameters from settings
-        try:
-            self.init_strength = settings.TS_INIT_STRENGTH
-            self.update_strength = settings.ts_update_strength
-            self.max_total = settings.TS_MAX_TOTAL
-        except:
-            # Fallback defaults if settings unavailable
-            self.init_strength = 4.0
-            self.update_strength = 5.0 if DEMO_MODE else 1.0
-            self.max_total = 50.0
+        self.demo_mode = settings.DEMO_MODE
+        self.init_strength = settings.TS_INIT_STRENGTH
+        self.update_strength = settings.ts_update_strength
+        self.max_total = settings.TS_MAX_TOTAL
         
         # Load existing arm stats from database
         if engine:
             self._load_from_db()
         
         if self.demo_mode:
-            print(f"[ThompsonSampler] DEMO_MODE enabled: update_strength={self.update_strength}")
+            logger.info(f"DEMO_MODE enabled: update_strength={self.update_strength}")
     
     def _load_from_db(self):
         """Load arm_stats from database on startup"""
@@ -69,9 +60,9 @@ class ThompsonSampler:
                     self.arm_params[key] = (float(row.alpha), float(row.beta))
                     count += 1
                 if count > 0:
-                    print(f"[ThompsonSampler] Loaded {count} arm stats from database")
+                    logger.info(f"Loaded {count} arm stats from database")
         except Exception as e:
-            print(f"[ThompsonSampler] Could not load arm_stats: {e}")
+            logger.warning(f"Could not load arm_stats: {e}")
     
     def get_params(self, key: tuple, similarity: float = None) -> Tuple[float, float]:
         """
@@ -128,7 +119,26 @@ class ThompsonSampler:
             "expected_value": alpha / (alpha + beta),
             "variance": (alpha * beta) / ((alpha + beta) ** 2 * (alpha + beta + 1)),
             "demo_mode": self.demo_mode,
+            "feedback_count": self.get_feedback_count(key),
         }
+    
+    def get_feedback_count(self, key: tuple) -> int:
+        """
+        Get the number of feedbacks for an arm.
+        
+        Initial alpha + beta = 2 + init_strength (similarity-based init)
+        Each feedback adds update_strength to either alpha or beta
+        So: n = (alpha + beta - (2 + init_strength)) / update_strength
+        """
+        if key not in self.arm_params:
+            return 0
+        
+        alpha, beta = self.arm_params[key]
+        initial_total = 2.0 + self.init_strength
+        
+        # Avoid negative counts due to floating point
+        feedback_total = max(0.0, alpha + beta - initial_total)
+        return int(feedback_total / self.update_strength)
     
     def initialize_from_similarity(self, key: tuple, similarity: float = None) -> Tuple[float, float]:
         """
@@ -140,8 +150,9 @@ class ThompsonSampler:
         
         Returns: (alpha, beta) for the new arm
         """
-        if similarity is not None and self.demo_mode:
+        if similarity is not None:
             # Informed prior based on similarity
+            # DEMO: init_strength=4.0, Normal: init_strength=1.0 (or configured)
             alpha = 1.0 + similarity * self.init_strength
             beta = 1.0 + (1.0 - similarity) * self.init_strength
         else:
@@ -160,6 +171,10 @@ class RecommendationEngine:
     - base_score: vector similarity
     - thompson_weight: sampled from Beta(alpha, beta)
     - price_factor: penalty if accessory is much more expensive than main product
+    
+    MMR (Maximal Marginal Relevance) for diversity:
+    - Top K items are exempt from MMR (preserve most relevant)
+    - Remaining items use sliding window diversity constraint
     """
     
     def __init__(self, repository: ProductRepository = None):
@@ -173,8 +188,22 @@ class RecommendationEngine:
         self.price_penalty_threshold = 1.5  # Penalty if accessory > 1.5x main product price
         self.price_penalty_max = 0.3  # Maximum penalty (30% reduction)
         
-        # Minimum candidates to return
-        self.min_candidates = 20
+        # MMR parameters (from settings)
+        self.mmr_enabled = settings.MMR_ENABLED
+        self.mmr_recall_size = settings.MMR_RECALL_SIZE
+        self.mmr_return_size = settings.MMR_RETURN_SIZE
+        self.mmr_pure_top_k = settings.MMR_PURE_TOP_K
+        self.mmr_window_size = settings.MMR_WINDOW_SIZE
+        self.mmr_lambda = settings.MMR_LAMBDA
+        self.mmr_min_score = settings.MMR_MIN_SCORE
+        
+        # Scoring weight parameters
+        self.demo_mode = settings.DEMO_MODE
+        self.ts_base_weight_demo = settings.TS_BASE_WEIGHT_DEMO  # Fixed weight in DEMO mode
+        self.ts_weight_halflife = settings.TS_WEIGHT_HALFLIFE    # Halflife for dynamic weight
+        
+        logger.info(f"RecommendationEngine initialized: MMR={'ON' if self.mmr_enabled else 'OFF'}, "
+                   f"DEMO={'ON' if self.demo_mode else 'OFF'}")
     
     def get_ranking(self, product_id: int, use_vector_search: bool = True) -> List[Dict]:
         """
@@ -188,46 +217,53 @@ class RecommendationEngine:
         Returns:
             List of recommendations
         """
+        # Clear pairwise similarity cache for this request
+        self._get_pairwise_similarity.cache_clear()
+        
         # Get main product
         main_product = self.repo.get_product_by_id(product_id)
         
         if main_product is None:
-            print("[RecommendationEngine] No products found!")
+            logger.warning(f"Product {product_id} not found!")
             return []
         
         # Get main product price for comparison
         main_price = main_product.get('price', 0) or 0
         
-        # Get candidates
+        # Get candidates (recall more for MMR)
         candidates = []
         search_method = "none"
+        recall_size = self.mmr_recall_size if self.mmr_enabled else self.mmr_return_size
         
         if use_vector_search:
             # vector similarity search
             try:
-                similar_products = self.repo.get_similar_products_by_vector(product_id, limit=20)
+                similar_products = self.repo.get_similar_products_by_vector(
+                    product_id, limit=recall_size
+                )
                 if similar_products:
                     candidates = similar_products
                     search_method = "vector"
+                    logger.debug(f"Vector search returned {len(candidates)} candidates")
             except Exception as e:
-                print(f"[RecommendationEngine] Vector search failed: {e}")
+                logger.error(f"Vector search failed: {e}")
         
         # Fallback: get all accessories if vector search failed
         if not candidates:
             candidates = self.repo.get_accessory_products()
             candidates = [c for c in candidates if c['id'] != main_product['id']]
-            search_method = "all"
+            search_method = "fallback"
         
         if not candidates:
-            print(f"[RecommendationEngine] No candidates for product {main_product['name']}")
+            logger.warning(f"No candidates for product {main_product['name']}")
             return []
         
         # Fill candidates if less than minimum (stable, deterministic)
-        if len(candidates) < self.min_candidates:
+        if len(candidates) < self.mmr_return_size:
             candidates = self._fill_candidates(
                 main_product_id=main_product['id'],
                 existing_candidates=candidates,
-                target_count=self.min_candidates
+                target_count=self.mmr_return_size
             )
         
         # Calculate scores with Thompson Sampling and price factor
@@ -241,10 +277,19 @@ class RecommendationEngine:
         # Sort by score (descending)
         scored_candidates.sort(key=lambda x: x['score'], reverse=True)
         
+        # Apply MMR for diversity
+        if self.mmr_enabled and len(scored_candidates) > self.mmr_return_size:
+            scored_candidates = self._mmr_rerank(scored_candidates)
+            logger.debug(f"MMR reranking: {len(candidates)} -> {len(scored_candidates)}")
+        else:
+            # Just take top N
+            scored_candidates = scored_candidates[:self.mmr_return_size]
+        
         # Build response
         result = self._build_response(scored_candidates)
         
-        print(f"[RecommendationEngine] Product {product_id} ({search_method}) -> {len(result)} recommendations")
+        logger.info(f"Product {product_id} ({search_method}) -> {len(result)} recommendations"
+                   f"{' [MMR]' if self.mmr_enabled else ''}")
         return result
     
     def _fill_candidates(
@@ -282,10 +327,113 @@ class RecommendationEngine:
         for c in fill_candidates:
             c['_is_fill'] = True
         
-        print(f"[RecommendationEngine] Filled {len(fill_candidates)} candidates "
-              f"({len(existing_candidates)} -> {len(existing_candidates) + len(fill_candidates)})")
+        logger.debug(f"Filled {len(fill_candidates)} candidates "
+                    f"({len(existing_candidates)} -> {len(existing_candidates) + len(fill_candidates)})")
         
         return existing_candidates + fill_candidates
+    
+    @lru_cache(maxsize=10000)
+    def _get_pairwise_similarity(self, id_i: int, id_j: int) -> float:
+        """
+        Cached pairwise cosine similarity between two products (for MMR).
+        
+        """
+        prod_i = self.repo.get_product_by_id(id_i)
+        prod_j = self.repo.get_product_by_id(id_j)
+        
+        if not prod_i or not prod_j:
+            return 0.0
+        
+        emb_i = prod_i.get('embedding')
+        emb_j = prod_j.get('embedding')
+        
+        if emb_i is None or emb_j is None:
+            return 0.0
+        
+        emb_i = np.array(emb_i)
+        emb_j = np.array(emb_j)
+        
+        norm_i = np.linalg.norm(emb_i)
+        norm_j = np.linalg.norm(emb_j)
+        
+        if norm_i == 0 or norm_j == 0:
+            return 0.0
+        
+        return float(np.dot(emb_i, emb_j) / (norm_i * norm_j))
+    
+    def _mmr_rerank(self, scored_candidates: List[Dict]) -> List[Dict]:
+        """
+        MMR (Maximal Marginal Relevance) reranking for diversity.
+        
+        Strategy:
+        - Position 1 ~ PURE_TOP_K: Take top items directly (preserve most relevant)
+        - Position > PURE_TOP_K: Use sliding window MMR
+        
+        MMR score for position t:
+        score_i = λ * rel_i - (1-λ) * max_{j in window} sim(i, j)
+        
+        Args:
+            scored_candidates: List of candidates sorted by relevance score (descending)
+            
+        Returns:
+            MMR-reranked list of candidates
+        """
+        if len(scored_candidates) <= self.mmr_return_size:
+            return scored_candidates
+        
+        selected = []
+        remaining = scored_candidates.copy()
+        
+        # Phase 1: Take top K directly (preserve most relevant)
+        pure_top_k = min(self.mmr_pure_top_k, len(remaining), self.mmr_return_size)
+        for _ in range(pure_top_k):
+            if remaining:
+                selected.append(remaining.pop(0))
+        
+        logger.debug(f"MMR Phase 1: Selected top {len(selected)} items directly")
+        
+        # Phase 2: MMR selection for remaining positions
+        while len(selected) < self.mmr_return_size and remaining:
+            # Get sliding window (last W items in selected)
+            window_start = max(0, len(selected) - self.mmr_window_size)
+            window = selected[window_start:]
+            
+            best_mmr_score = float('-inf')
+            best_idx = 0
+            
+            for idx, cand in enumerate(remaining):
+                rel_score = cand['score']
+                
+                # Skip items below minimum relevance threshold
+                if rel_score < self.mmr_min_score:
+                    continue
+                
+                # Calculate max similarity with items in window
+                cand_id = cand['item']['id']
+                max_sim = 0.0
+                
+                for sel in window:
+                    sel_id = sel['item']['id']
+                    sim = self._get_pairwise_similarity(cand_id, sel_id)
+                    max_sim = max(max_sim, sim)
+                
+                # MMR score: λ * relevance - (1-λ) * max_similarity
+                mmr_score = self.mmr_lambda * rel_score - (1 - self.mmr_lambda) * max_sim
+                
+                if mmr_score > best_mmr_score:
+                    best_mmr_score = mmr_score
+                    best_idx = idx
+            
+            # Select the best candidate
+            if best_mmr_score > float('-inf'):
+                selected.append(remaining.pop(best_idx))
+            else:
+                # No valid candidates left (all below threshold)
+                break
+        
+        logger.debug(f"MMR Phase 2: Final selection has {len(selected)} items")
+        
+        return selected
     
     def _calculate_price_factor(self, main_price: float, candidate_price: float) -> float:
         """
@@ -319,10 +467,14 @@ class RecommendationEngine:
         """
         Calculate final scores for candidates.
         
-        Formula: final_score = (base_score * 0.8 + thompson_weight * 0.2) * price_factor
+        DEMO_MODE: Fixed weights for visible learning effects
+            combined = base_score * 0.8 + thompson_weight * 0.2
         
-        In DEMO_MODE, Thompson Sampling is initialized with informed priors
-        based on vector similarity.
+        Normal mode: Dynamic weights based on feedback count
+            gamma = n / (n + k)  where n = feedback count, k = halflife
+            combined = (1 - gamma) * base_score + gamma * thompson_weight
+            
+        Final: final_score = combined * price_factor
         """
         scored = []
         
@@ -348,9 +500,21 @@ class RecommendationEngine:
             candidate_price = item.get('price', 0) or 0
             price_factor = self._calculate_price_factor(main_price, candidate_price)
             
-            # Combine scores
-            # Thompson weight is in [0, 1], use it to adjust the score
-            combined_score = base_score * 0.8 + thompson_weight * 0.2
+            # Combine scores with mode-specific weighting
+            if self.demo_mode:
+                # DEMO mode: Fixed weights for visible learning effects
+                base_weight = self.ts_base_weight_demo  # 0.8
+                ts_weight = 1.0 - base_weight  # 0.2
+                combined_score = base_score * base_weight + thompson_weight * ts_weight
+            else:
+                # Normal mode: Dynamic weights based on feedback count
+                # gamma increases from 0 to 1 as feedback accumulates
+                n = self.sampler.get_feedback_count(arm_key)
+                k = self.ts_weight_halflife  # Feedback count for gamma=0.5
+                gamma = n / (n + k) if (n + k) > 0 else 0.0
+                
+                # Cold start: rely on base_score; with feedback: rely on TS
+                combined_score = (1.0 - gamma) * base_score + gamma * thompson_weight
             
             # Apply price penalty
             final_score = combined_score * price_factor
@@ -423,10 +587,9 @@ class RecommendationEngine:
         # Get expected value after update
         expected = self.sampler.get_expected_value(arm_key)
         
-        action = "👍😊 Positive" if is_relevant else "👎😔 Negative"
-        print(f"[RecommendationEngine] Feedback: {action} | "
-              f"Main={product_id}, Rec={recommended_product_id} | "
-              f"Beta({alpha:.0f},{beta:.0f}) -> E[θ]={expected:.3f}")
+        action = "👍 Positive" if is_relevant else "👎 Negative"
+        logger.info(f"Feedback: {action} | Main={product_id}, Rec={recommended_product_id} | "
+                   f"Beta({alpha:.1f},{beta:.1f}) -> E[θ]={expected:.3f}")
         
         return True
     

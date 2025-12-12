@@ -21,6 +21,19 @@ class Settings(BaseSettings):
     TS_UPDATE_STRENGTH_NORMAL: float = Field(1.0, env="TS_UPDATE_STRENGTH_NORMAL")  # Update strength in normal mode
     TS_MAX_TOTAL: float = Field(100.0, env="TS_MAX_TOTAL")             # Cap on alpha + beta
     
+    # Scoring weight parameters
+    TS_BASE_WEIGHT_DEMO: float = Field(0.8, env="TS_BASE_WEIGHT_DEMO")     # Base score weight in DEMO mode 
+    TS_WEIGHT_HALFLIFE: float = Field(10.0, env="TS_WEIGHT_HALFLIFE")      # Feedback count for gamma=0.5 (normal mode)
+    
+    # MMR (Maximal Marginal Relevance) parameters for diversity
+    MMR_ENABLED: bool = Field(True, env="MMR_ENABLED")                 # Enable MMR reranking
+    MMR_RECALL_SIZE: int = Field(60, env="MMR_RECALL_SIZE")           # Number of candidates to retrieve before MMR
+    MMR_RETURN_SIZE: int = Field(20, env="MMR_RETURN_SIZE")           # Number of items to return after MMR
+    MMR_PURE_TOP_K: int = Field(3, env="MMR_PURE_TOP_K")              # Top K items exempt from MMR
+    MMR_WINDOW_SIZE: int = Field(5, env="MMR_WINDOW_SIZE")            # Sliding window size for diversity check
+    MMR_LAMBDA: float = Field(0.7, env="MMR_LAMBDA")                  # Relevance weight (1-λ = diversity weight)
+    MMR_MIN_SCORE: float = Field(0.2, env="MMR_MIN_SCORE")            # Minimum relevance threshold
+    
     @property
     def ts_update_strength(self) -> float:
         """Get update strength based on DEMO_MODE"""

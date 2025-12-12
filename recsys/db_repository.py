@@ -2,6 +2,7 @@
 Database Access Layer - Handles all database operations
 
 """
+import logging
 import os
 import sys
 from typing import List, Dict, Optional
@@ -12,6 +13,9 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session
 from app.config.config import settings
 from app.models import Product
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 
 class ProductRepository:
@@ -70,7 +74,7 @@ class ProductRepository:
                 self._products.append(product_dict)
                 self._product_map[p.id] = product_dict
         
-        print(f"[Repository] Loaded {len(self._products)} products from database")
+        logger.info(f"Loaded {len(self._products)} products from database")
     
     def reload(self):
         self._load_products()
