@@ -21,6 +21,12 @@ recsys/
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
+│  0. Cache Check                                                 │
+│     ├── If cached → return immediately                          │
+│     └── If not cached → proceed to retrieval                    │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
 │  1. Multi-Channel Retrieval                                     │
 │     ┌──────────────────┐    ┌──────────────────┐                │
 │     │ Vector Retrieval │    │  LLM Retrieval   │                │
@@ -44,9 +50,15 @@ recsys/
 │     Select 20 diverse items from ~50-60 candidates              │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
-                    ┌──────────────┐
-                    │  返回 Top-20  │
-                    └──────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  4. Cache & Return                                              │
+│     ├── Cache result for this main_product_id                   │
+│     └── Return Top-20                                           │
+└─────────────────────────────────────────────────────────────────┘
+
+Cache Invalidation:
+- Cache is cleared ONLY when update_model() is called (user feedback)
+- This ensures stable recommendations until feedback is provided
 ```
 
 ---
@@ -70,11 +82,12 @@ recsys/
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│  3. llm_recall_processor.py (New!)                              │
+│  3. llm_recall_processor.py                                     │
 │     - Read LLM recommendations JSON                             │
 │     - Compute embeddings for recommendation texts               │
-│     - Match to real SKUs via vector similarity                  │
+│     - Match to real SKUs via vector similarity (TOP_K=3)        │
 │     - Save to llm_recommendations table                         │
+│     - Skips if already processed                                │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -121,7 +134,9 @@ ThompsonSampler (Class)
 
 RecommendationEngine (Class)
 ├── __init__(repository=None)                 - Initialize (uses singleton)
+│   └── _recommendation_cache = {}            - Cache for stable recommendations
 ├── get_ranking(product_id, use_vector_search)
+│   ├── Check cache → return if hit
 │   ├── Get main product + price
 │   ├── Multi-channel retrieval (Vector + LLM)
 │   ├── Merge + RRF fusion (_merge_and_fuse)
@@ -129,6 +144,7 @@ RecommendationEngine (Class)
 │   ├── Fill candidates if < return_size (_fill_candidates)
 │   ├── Calculate scores (_calculate_scores)
 │   ├── Apply MMR for diversity (_mmr_rerank)
+│   ├── Cache result
 │   └── Build response (_build_response)
 ├── _merge_and_fuse(vector_cands, llm_cands, main_id)
 │   ├── UNION deduplication
@@ -146,7 +162,8 @@ RecommendationEngine (Class)
 ├── _mmr_rerank(scored_candidates)            - MMR diversity reranking
 ├── _build_response(scored_candidates)        - Format to API schema
 ├── update_model(product_id, rec_id, is_relevant)
-│   └── Update Thompson Sampling parameters (memory)
+│   ├── Update Thompson Sampling parameters (memory)
+│   └── Clear cache for this product_id       - Trigger recalculation on next request
 ├── get_arm_stats(product_id, rec_id)         - Get arm statistics
 ├── reload_data()                             - Reload products from database
 └── reload_arm_stats()                        - Reload arm_stats from database
@@ -248,7 +265,7 @@ Parameters (all configurable via .env):
 ├── TS_UPDATE_STRENGTH_DEMO   - Update strength in demo mode (default: 10.0)
 ├── TS_UPDATE_STRENGTH_NORMAL - Update strength in normal mode (default: 1.0)
 ├── TS_MAX_TOTAL              - Cap on α+β to prevent variance collapse (default: 100.0)
-├── TS_BASE_WEIGHT_DEMO       - Base score weight in demo mode (default: 0.6)
+├── TS_BASE_WEIGHT_DEMO       - Base score weight in demo mode (default: 0.8)
 └── TS_WEIGHT_HALFLIFE        - Feedback count for gamma=0.5 in normal mode (default: 10.0)
 
 Both modes use similarity-based initialization:
@@ -323,6 +340,33 @@ Pipeline:
 2. Check/download bge-m3 model
 3. Run feature_engineering.main()
 4. Run embedding_generation.main(ollama_url)
+5. Run llm_recall_processor.main(ollama_url)  
+   - Skips if input JSON not found
+   - Skips if llm_recommendations already populated
+```
+
+---
+
+## llm_recall_processor.py - LLM Retrieval Processing
+
+```
+Functions (Async):
+├── get_database_url()                        - Build DB URL from env vars
+├── parse_vector_string(s)                    - Parse pgvector string format
+├── get_accessory_embeddings(engine)          - Load accessory embeddings
+├── match_embedding_to_products(emb, db_embs) - Find top-K matching SKUs
+├── insert_recommendations(engine, records)   - Insert to llm_recommendations table
+├── load_json_data(filepath)                  - Load and flatten LLM JSON
+├── generate_embedding_async(client, text)    - Generate single embedding
+├── process_batch_async(client, batch)        - Concurrent batch processing
+└── main(ollama_url=None)                     - Main processing function
+
+Features:
+- Can be run standalone (local testing) or imported by auto_preprocess
+- Skips if llm_recommendations table already has data
+- Skips if input JSON file doesn't exist
+- TOP_K = 3 matches per recommendation text
+- MIN_SIMILARITY = 0.3 threshold
 ```
 
 ---

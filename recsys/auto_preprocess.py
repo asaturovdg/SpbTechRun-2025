@@ -2,7 +2,7 @@
 Embedding Generation Pipeline (Docker Entry Point)
 
 This script is the entry point for Docker container.
-It orchestrates: model check/download → feature engineering → embedding generation
+It orchestrates: model check/download → feature engineering → embedding generation → LLM retrieval
 
 """
 
@@ -89,8 +89,10 @@ async def ensure_model_exists() -> bool:
         return False
 
 
-
+# ============================================================================
 # Main Pipeline
+# ============================================================================
+
 async def main():
     print("=" * 80)
     print("Embedding Generation Pipeline")
@@ -140,13 +142,24 @@ async def main():
         print("FAILED: Embedding generation failed")
         return False
     
+    # Step 5: Process LLM retrieval (optional, depends on JSON file)
+    print("\n" + "-" * 80)
+    print("[Step 5] LLM Retrieval Processing")
+    print("-" * 80)
+    
+    from recsys import llm_recall_processor
+    success = await llm_recall_processor.main(ollama_url=settings.ollama_url)
+    if not success:
+        print("WARNING: LLM retrieval processing had issues (non-fatal)")
+        # Don't fail the entire pipeline for LLM retrieval issues
+    
     return True
 
 
 if __name__ == "__main__":
     success = asyncio.run(main())
     if success:
-        print("\n Pipeline completed successfully!")
+        print("\n✅ Pipeline completed successfully!")
     else:
-        print("\n Pipeline failed!")
+        print("\n❌ Pipeline failed!")
         exit(1)

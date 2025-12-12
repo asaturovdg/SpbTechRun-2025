@@ -1,7 +1,10 @@
 """
-LLM Retrieval Processor
+LLM Retrieval Processor (Standalone Script)
 
 Processes LLM-generated recommendations and matches them to real SKUs.
+This is a standalone script for local testing/debugging.
+
+For Docker deployment, use auto_preprocess.py which includes this functionality.
 
 Input: temp/recommendations_output.json
 Output: llm_recommendations table
@@ -17,20 +20,25 @@ import os
 import sys
 import json
 import asyncio
+import logging
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
+
+import numpy as np
 from tqdm import tqdm
 
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+
+
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-
-# ============================================================================
-# Configuration
-# ============================================================================
 
 MODEL_NAME = "bge-m3"
 TEMP_DIR = Path(__file__).parent / "temp"
@@ -38,20 +46,17 @@ INPUT_FILE = TEMP_DIR / "recommendations_output.json"
 
 # Matching settings
 TOP_K = 3  # Number of matches per rec_text
-MIN_SIMILARITY = 0.3  # Minimum similarity threshold (discard lower matches)
-
-# Concurrency settings
+MIN_SIMILARITY = 0.3  # Minimum similarity threshold
 BATCH_SIZE = 10
 MAX_RETRIES = 3
 
 # Import ollama
 try:
-    import ollama
     from ollama import AsyncClient
     OLLAMA_AVAILABLE = True
 except ImportError:
     OLLAMA_AVAILABLE = False
-    print("WARNING: ollama library not installed. Install with: pip install ollama")
+    logger.error("ollama library not installed. Install with: pip install ollama")
 
 
 # ============================================================================
@@ -59,22 +64,22 @@ except ImportError:
 # ============================================================================
 
 def get_database_url() -> str:
-    """Get database URL, handling local vs Docker environment"""
-    from app.config.config import settings
+    """Get database URL from environment variables"""
+    db_host = os.environ.get("DB_HOST", "localhost")
+    db_port = os.environ.get("DB_PORT", "5433")
+    db_user = os.environ.get("DB_USER", "postgres")
+    db_password = os.environ.get("DB_PASSWORD", "postgres")
+    db_name = os.environ.get("DB_DB", "recsys")
     
-    # Check if running locally (not in Docker)
-    is_docker = os.path.exists("/.dockerenv") or os.path.exists("/proc/1/cgroup")
-    
-    if not is_docker and os.environ.get("DB_HOST") == "db":
-        # Override for local execution
-        db_host = "localhost"
-        db_port = os.environ.get("DB_PORT", "5433")
-        db_user = os.environ.get("DB_USER", "postgres")
-        db_password = os.environ.get("DB_PASSWORD", "postgres")
-        db_name = os.environ.get("DB_DB", "recsys")
-        return f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
-    
-    return settings.database_url_sync
+    return f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+
+
+def parse_vector_string(s: str) -> List[float]:
+    """Parse pgvector string format '[0.1,0.2,0.3,...]' to list of floats"""
+    s = s.strip()
+    if s.startswith('[') and s.endswith(']'):
+        s = s[1:-1]
+    return [float(x) for x in s.split(',') if x.strip()]
 
 
 def get_accessory_embeddings(engine) -> Dict[int, List[float]]:
@@ -90,10 +95,17 @@ def get_accessory_embeddings(engine) -> Dict[int, List[float]]:
         """))
         
         for row in result:
-            if row.embedding:
-                embeddings[row.id] = row.embedding
+            if row.embedding is not None:
+                # psycopg2 returns pgvector as string "[0.1,0.2,...]"
+                if isinstance(row.embedding, str):
+                    emb = parse_vector_string(row.embedding)
+                else:
+                    emb = list(row.embedding)
+                
+                if len(emb) > 0:
+                    embeddings[row.id] = emb
     
-    print(f"Loaded {len(embeddings)} accessory embeddings from database")
+    logger.info(f"Loaded {len(embeddings)} accessory embeddings from database")
     return embeddings
 
 
@@ -102,13 +114,7 @@ def match_embedding_to_products(
     product_embeddings: Dict[int, List[float]],
     top_k: int = 1
 ) -> List[Tuple[int, float]]:
-    """
-    Find top-K matching products for a recommendation embedding.
-    
-    Returns: List of (product_id, similarity_score) tuples
-    """
-    import numpy as np
-    
+    """Find top-K matching products for a recommendation embedding"""
     rec_vec = np.array(rec_embedding)
     rec_norm = np.linalg.norm(rec_vec)
     
@@ -149,7 +155,7 @@ def insert_recommendations(engine, records: List[Dict]) -> Tuple[int, int]:
                 """), record)
                 success += 1
             except Exception as e:
-                print(f"  Failed to insert: {e}")
+                logger.warning(f"Failed to insert: {e}")
                 failed += 1
         
         session.commit()
@@ -171,10 +177,7 @@ def clear_existing_recommendations(engine, main_product_ids: List[int]):
 # Embedding Functions
 # ============================================================================
 
-async def generate_embedding_async(
-    client: AsyncClient, 
-    text: str
-) -> Optional[List[float]]:
+async def generate_embedding_async(client: AsyncClient, text: str) -> Optional[List[float]]:
     """Generate embedding for a single text"""
     for attempt in range(MAX_RETRIES):
         try:
@@ -184,23 +187,15 @@ async def generate_embedding_async(
             if attempt < MAX_RETRIES - 1:
                 await asyncio.sleep(0.5 * (attempt + 1))
             else:
-                print(f"  Embedding failed after {MAX_RETRIES} attempts: {e}")
+                logger.warning(f"Embedding failed after {MAX_RETRIES} attempts: {e}")
                 return None
 
 
-async def process_batch_async(
-    client: AsyncClient,
-    batch: List[Dict]
-) -> List[Dict]:
+async def process_batch_async(client: AsyncClient, batch: List[Dict]) -> List[Dict]:
     """Process a batch of recommendations asynchronously"""
-    tasks = []
-    for item in batch:
-        task = generate_embedding_async(client, item['rec_text'])
-        tasks.append(task)
-    
+    tasks = [generate_embedding_async(client, item['rec_text']) for item in batch]
     embeddings = await asyncio.gather(*tasks)
     
-    # Attach embeddings to items
     for item, emb in zip(batch, embeddings):
         item['embedding'] = emb
     
@@ -243,45 +238,47 @@ async def main(ollama_url: Optional[str] = None):
     print("LLM Retrieval Processor")
     print("=" * 60)
     
-    # Check ollama
     if not OLLAMA_AVAILABLE:
-        print("ERROR: ollama not available")
+        logger.error("ollama not available")
         return False
     
     # Load JSON data
-    print(f"\n[1/5] Loading JSON from {INPUT_FILE}...")
+    logger.info(f"[1/5] Loading JSON from {INPUT_FILE}...")
     if not INPUT_FILE.exists():
-        print(f"ERROR: File not found: {INPUT_FILE}")
-        return False
+        logger.info(f"Input file not found: {INPUT_FILE}")
+        logger.info("Skipping LLM retrieval processing (no LLM recommendations available)")
+        return True  # Not an error, just skip
     
-    records = load_json_data(INPUT_FILE)
-    print(f"  Loaded {len(records)} recommendations")
-    
-    # Get unique main product IDs
-    main_product_ids = list(set(r['main_product_id'] for r in records))
-    print(f"  From {len(main_product_ids)} main products")
-    
-    # Connect to database
-    print("\n[2/5] Connecting to database...")
+    # Check if already processed
     database_url = get_database_url()
     engine = create_engine(database_url, echo=False)
     
-    # Load accessory embeddings
-    print("\n[3/5] Loading accessory embeddings...")
+    with Session(engine) as session:
+        result = session.execute(text("SELECT COUNT(*) FROM llm_recommendations"))
+        count = result.scalar()
+        if count > 0:
+            logger.info(f"LLM recommendations already exist in database ({count} records), skipping")
+            return True
+    
+    records = load_json_data(INPUT_FILE)
+    logger.info(f"Loaded {len(records)} recommendations")
+    
+    main_product_ids = list(set(r['main_product_id'] for r in records))
+    logger.info(f"From {len(main_product_ids)} main products")
+    
+    # Load accessory embeddings (engine already created above)
+    logger.info("[3/5] Loading accessory embeddings...")
     product_embeddings = get_accessory_embeddings(engine)
     
     if not product_embeddings:
-        print("ERROR: No accessory embeddings found in database")
+        logger.error("No accessory embeddings found in database")
         return False
     
     # Generate embeddings and match
-    print(f"\n[4/5] Processing {len(records)} recommendations...")
+    logger.info(f"[4/5] Processing {len(records)} recommendations...")
     
     # Setup ollama client
-    if ollama_url:
-        client = AsyncClient(host=ollama_url)
-    else:
-        client = AsyncClient()
+    client = AsyncClient(host=ollama_url) if ollama_url else AsyncClient()
     
     # Process in batches
     results_to_insert = []
@@ -322,17 +319,12 @@ async def main(ollama_url: Optional[str] = None):
     
     pbar.close()
     
-    print(f"  Generated {len(results_to_insert)} matched records")
+    logger.info(f"Generated {len(results_to_insert)} matched records")
     
     # Insert into database
-    print("\n[5/5] Inserting into database...")
-    
-    # Optional: clear existing records first
-    # clear_existing_recommendations(engine, main_product_ids)
-    
+    logger.info("[5/5] Inserting into database...")
     success, failed = insert_recommendations(engine, results_to_insert)
-    
-    print(f"  Inserted: {success}, Failed: {failed}")
+    logger.info(f"Inserted: {success}, Failed: {failed}")
     
     print("\n" + "=" * 60)
     print("✅ Processing complete!")
@@ -346,15 +338,14 @@ async def main(ollama_url: Optional[str] = None):
 # ============================================================================
 
 if __name__ == "__main__":
-    # Set environment variables for local execution
-    os.environ.setdefault("DB_HOST", "localhost")
-    os.environ.setdefault("DB_PORT", "5433")
-    os.environ.setdefault("DB_USER", "postgres")
-    os.environ.setdefault("DB_PASSWORD", "postgres")
-    os.environ.setdefault("DB_DB", "recsys")
-    os.environ.setdefault("OLLAMA_HOST", "localhost")
-    os.environ.setdefault("OLLAMA_PORT", "11434")
-    
+
+    os.environ["DB_HOST"] = "localhost"
+    os.environ["DB_PORT"] = "5433"
+    os.environ["DB_USER"] = "postgres"
+    os.environ["DB_PASSWORD"] = "postgres"
+    os.environ["DB_DB"] = "recsys"
+    os.environ["OLLAMA_HOST"] = "localhost"
+    os.environ["OLLAMA_PORT"] = "11434"
     # Handle event loop for different environments
     try:
         import nest_asyncio
@@ -362,7 +353,6 @@ if __name__ == "__main__":
     except ImportError:
         pass
     
-    # Run
-    from app.config.config import settings
-    asyncio.run(main(ollama_url=settings.ollama_url))
-
+    # Run with local URL
+    ollama_url = "http://localhost:11434"
+    asyncio.run(main(ollama_url=ollama_url))

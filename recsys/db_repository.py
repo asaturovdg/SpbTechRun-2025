@@ -200,8 +200,7 @@ class ProductRepository:
                     FROM llm_recommendations lr
                     JOIN products p ON lr.matched_product_id = p.id
                     WHERE lr.main_product_id = :product_id
-                      AND lr.resolved_rank = 1
-                    ORDER BY lr.rec_rank
+                    ORDER BY lr.rec_rank, lr.resolved_rank
                 """)
                 
                 result = session.execute(query, {"product_id": product_id})

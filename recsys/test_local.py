@@ -71,7 +71,7 @@ def test_database_connection(engine):
     # Show MMR configuration
     print(f"\n🔀 MMR (Diversity) Configuration:")
     print(f"   MMR Enabled: {settings.MMR_ENABLED}")
-    print(f"   Expected UNION size: {settings.MMR_RECALL_SIZE}")
+    print(f"   Expected UNION size: {settings.MMR_RETRIEVAL_SIZE}")
     print(f"   Return size: {settings.MMR_RETURN_SIZE}")
     print(f"   Pure top K: {settings.MMR_PURE_TOP_K}")
     print(f"   Window size: {settings.MMR_WINDOW_SIZE}")
@@ -371,6 +371,15 @@ def test_mmr_comparison(engine, main_products):
     engine.mmr_enabled = False
     recs_no_mmr = engine.get_ranking(test_product['id'], use_vector_search=True)
     stats_no_mmr = _analyze_diversity(engine, recs_no_mmr, "No MMR")
+    
+    # Debug: Check if RRF is being used
+    # Access internal candidates via a test call
+    test_vector = engine.repo.get_similar_products_by_vector(test_product['id'], limit=5)
+    test_llm = engine.repo.get_llm_recommendations(test_product['id'])
+    print(f"\n   🔍 DEBUG: Vector has 'similarity': {'similarity' in test_vector[0] if test_vector else 'N/A'}")
+    print(f"   🔍 DEBUG: LLM result count: {len(test_llm) if test_llm else 0}")
+    if test_llm:
+        print(f"   🔍 DEBUG: LLM[0] keys: {list(test_llm[0].keys())[:8]}...")
     
     if stats_no_mmr:
         print(f"\n   📋 Top 10 recommendations:")

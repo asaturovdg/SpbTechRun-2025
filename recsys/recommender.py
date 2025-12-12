@@ -207,6 +207,10 @@ class RecommendationEngine:
         self.ts_base_weight_demo = settings.TS_BASE_WEIGHT_DEMO  # Fixed weight in DEMO mode
         self.ts_weight_halflife = settings.TS_WEIGHT_HALFLIFE    # Halflife for dynamic weight
         
+        # Recommendation cache: only update after feedback
+        # Key: main_product_id, Value: list of recommendations
+        self._recommendation_cache: Dict[int, List[Dict]] = {}
+        
         logger.info(f"RecommendationEngine initialized: MMR={'ON' if self.mmr_enabled else 'OFF'}, "
                    f"LLM_RETRIEVAL={'ON' if self.llm_retrieval_enabled else 'OFF'}, "
                    f"DEMO={'ON' if self.demo_mode else 'OFF'}")
@@ -228,6 +232,11 @@ class RecommendationEngine:
         Returns:
             List of recommendations
         """
+        # Check cache first (DEMO mode: stable results until feedback)
+        if product_id in self._recommendation_cache:
+            logger.debug(f"Returning cached recommendations for product {product_id}")
+            return self._recommendation_cache[product_id]
+        
         # Clear pairwise similarity cache for this request
         self._get_pairwise_similarity.cache_clear()
         
@@ -319,6 +328,10 @@ class RecommendationEngine:
         logger.info(f"Product {product_id}: Vector={retrieval_stats.get('vector', 0)}, "
                    f"LLM={retrieval_stats.get('llm', 0)}, UNION={retrieval_stats.get('union', 0)} "
                    f"-> {len(result)} recommendations")
+        
+        # Cache result for stable recommendations until feedback
+        self._recommendation_cache[product_id] = result
+        
         return result
     
     def _merge_and_fuse(
@@ -703,6 +716,9 @@ class RecommendationEngine:
         action = "👍 Positive" if is_relevant else "👎 Negative"
         logger.info(f"Feedback: {action} | Main={product_id}, Rec={recommended_product_id} | "
                    f"Beta({alpha:.1f},{beta:.1f}) -> E[θ]={expected:.3f}")
+        
+        # Clear cache for this product so next request reflects the feedback
+        self._recommendation_cache.pop(product_id, None)
         
         return True
     
