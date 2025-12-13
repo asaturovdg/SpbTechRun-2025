@@ -3,7 +3,7 @@ from typing import Optional, List
 
 import numpy as np
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import BigInteger, Integer, String, Float, Boolean, ForeignKey, DateTime, JSON, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Integer, String, Float, Boolean, ForeignKey, DateTime, JSON, Text, UniqueConstraint, Index
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -129,3 +129,35 @@ class ArmStats(Base):
     __table_args__ = (
         UniqueConstraint("product_id", "recommended_product_id"),
     )
+
+
+    class LLMRecommendation(Base):
+        __tablename__ = "llm_recommendations"
+
+        id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+        main_product_id: Mapped[int] = mapped_column(
+            Integer,
+            ForeignKey("products.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True
+        )
+        rec_text: Mapped[str] = mapped_column(Text, nullable=False)
+        rec_rank: Mapped[int] = mapped_column(Integer, nullable=False)
+        matched_product_id: Mapped[int | None] = mapped_column(
+            Integer,
+            ForeignKey("products.id", ondelete="CASCADE"),
+            nullable=True,
+            index=True
+        )
+        match_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+        resolved_rank: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+        created_at: Mapped[datetime] = mapped_column(
+            DateTime(timezone=True),
+            server_default=func.now(),
+            nullable=False,
+        )
+
+        __table_args__ = (
+            Index("idx_llm_rec_main", "main_product_id"),
+            Index("idx_llm_rec_matched", "matched_product_id"),
+        )

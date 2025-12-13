@@ -2,6 +2,7 @@
 Database Access Layer - Handles all database operations
 
 """
+import logging
 import os
 import sys
 from typing import List, Dict, Optional
@@ -12,6 +13,9 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session
 from app.config.config import settings
 from app.models import Product
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 
 class ProductRepository:
@@ -70,7 +74,7 @@ class ProductRepository:
                 self._products.append(product_dict)
                 self._product_map[p.id] = product_dict
         
-        print(f"[Repository] Loaded {len(self._products)} products from database")
+        logger.info(f"Loaded {len(self._products)} products from database")
     
     def reload(self):
         self._load_products()
@@ -174,6 +178,54 @@ class ProductRepository:
                     "url": row.url,
                     "similarity": float(row.similarity) if row.similarity else 0.0
                 })
+        
+        return results
+    
+    def get_llm_recommendations(self, product_id: int) -> List[Dict]:
+        """
+        Get LLM-based recommendations from llm_recommendations table.
+        
+        Returns list of matched products with LLM ranking info.
+        """
+        results = []
+        
+        with Session(self.engine) as session:
+            # Check if table exists first
+            try:
+                query = text("""
+                    SELECT lr.rec_rank, lr.match_score, lr.resolved_rank,
+                           p.id, p.name, p.product_role, p.price,
+                           p.category_name, p.vendor, p.picture_url,
+                           p.type, p.description, p.url
+                    FROM llm_recommendations lr
+                    JOIN products p ON lr.matched_product_id = p.id
+                    WHERE lr.main_product_id = :product_id
+                    ORDER BY lr.rec_rank, lr.resolved_rank
+                """)
+                
+                result = session.execute(query, {"product_id": product_id})
+                
+                for row in result:
+                    results.append({
+                        "id": row.id,
+                        "name": row.name,
+                        "product_role": row.product_role,
+                        "price": row.price,
+                        "category_name": row.category_name,
+                        "vendor": row.vendor,
+                        "picture_url": row.picture_url,
+                        "type": row.type,
+                        "description": row.description,
+                        "url": row.url,
+                        "llm_rank": row.rec_rank,
+                        "llm_match_score": float(row.match_score) if row.match_score else 0.0,
+                        "_source": "llm"
+                    })
+                    
+            except Exception as e:
+                # Table might not exist yet
+                logger.debug(f"LLM recommendations not available: {e}")
+                return []
         
         return results
 
