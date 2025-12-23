@@ -234,20 +234,96 @@
                               {{ rec.recommended_product.name }}
                             </div>
                             
-                            <div class="match-ring" :style="{ '--score': rec.similarity_score }">
-                               <div 
-                                  v-if="rec.old_score !== undefined && (rec.similarity_score * 100).toFixed(0) !== (rec.old_score * 100).toFixed(0)" 
-                                  class="score-stack"
-                               >
-                                  <span class="val-new">{{ (rec.similarity_score * 100).toFixed(0) }}</span>
-                                  <span class="val-arrow" :class="rec.similarity_score < rec.old_score ? 'text-red' : 'text-green'">
-                                      {{ rec.similarity_score < rec.old_score ? '↓' : '↑' }}
-                                  </span>
-                                  <span class="val-old">{{ (rec.old_score * 100).toFixed(0) }}</span>
-                               </div>
-                               <span v-else>{{ (rec.similarity_score * 100).toFixed(0) }}%</span>
+                            <div class="score-info-container">
+                              <div class="match-ring" :style="{ '--score': rec.similarity_score }">
+                                <div 
+                                    v-if="rec.old_score !== undefined && (rec.similarity_score * 100).toFixed(0) !== (rec.old_score * 100).toFixed(0)" 
+                                    class="score-stack"
+                                >
+                                    <span class="val-new">{{ (rec.similarity_score * 100).toFixed(0) }}</span>
+                                    <span class="val-arrow" :class="rec.similarity_score < rec.old_score ? 'text-red' : 'text-green'">
+                                        {{ rec.similarity_score < rec.old_score ? '↓' : '↑' }}
+                                    </span>
+                                    <span class="val-old">{{ (rec.old_score * 100).toFixed(0) }}</span>
+                                </div>
+                                <span v-else>{{ (rec.similarity_score * 100).toFixed(0) }}%</span>
+                              </div>
+                              
+                              <!-- Info icon to expand score breakdown (always show) -->
+                              <button 
+                                class="info-toggle-btn"
+                                :class="{ active: expandedScoreCards[rec.recommended_product.id] }"
+                                @click.stop="toggleScoreBreakdown(rec.recommended_product.id)"
+                                title="Show score breakdown"
+                              >
+                                <span>ⓘ</span>
+                              </button>
                             </div>
+                        </div>
+                        
+                        <!-- Expandable Score Breakdown Panel -->
+                        <transition name="expand">
+                          <div 
+                            v-if="expandedScoreCards[rec.recommended_product.id]" 
+                            class="score-breakdown-panel"
+                          >
+                            <!-- Show message if no data available -->
+                            <div v-if="!rec.score_breakdown" class="no-data-message">
+                              <span>⚠️ Score breakdown not available</span>
+                              <small>Backend update required</small>
                             </div>
+                            <template v-else>
+                            <div class="breakdown-title">Score Breakdown</div>
+                            <div class="breakdown-grid">
+                              <div class="breakdown-row">
+                                <span class="breakdown-label">Base Score (RRF)</span>
+                                <span class="breakdown-value">{{ (rec.score_breakdown.base_score * 100).toFixed(0) }}%</span>
+                                <div class="breakdown-bar" :style="{ width: (rec.score_breakdown.base_score * 100) + '%' }"></div>
+                              </div>
+                              <div class="breakdown-row">
+                                <span class="breakdown-label">Thompson Sampling</span>
+                                <span class="breakdown-value">{{ (rec.score_breakdown.thompson_weight * 100).toFixed(0) }}%</span>
+                                <div class="breakdown-bar ts" :style="{ width: (rec.score_breakdown.thompson_weight * 100) + '%' }"></div>
+                              </div>
+                              <div class="breakdown-row">
+                                <span class="breakdown-label">Price Factor</span>
+                                <span class="breakdown-value" :class="{ 'has-penalty': rec.score_breakdown.price_factor < 1 }">
+                                  {{ rec.score_breakdown.price_factor < 1 ? '×' + rec.score_breakdown.price_factor.toFixed(2) : '✓ No penalty' }}
+                                </span>
+                              </div>
+                              <div class="breakdown-row" v-if="rec.score_breakdown.feedback_count > 0">
+                                <span class="breakdown-label">Feedbacks</span>
+                                <span class="breakdown-value">{{ rec.score_breakdown.feedback_count }}</span>
+                              </div>
+                            </div>
+                            
+                            <div class="breakdown-title" style="margin-top: 10px;">Retrieval Trace</div>
+                            <div class="breakdown-grid" v-if="rec.retrieval_trace">
+                              <div class="breakdown-row channels-row">
+                                <span class="breakdown-label">Channels</span>
+                                <span class="breakdown-value channels">{{ formatChannels(rec.retrieval_trace.channels) }}</span>
+                              </div>
+                              <div class="breakdown-row" v-if="rec.retrieval_trace.vector_rank">
+                                <span class="breakdown-label">Vector Rank</span>
+                                <span class="breakdown-value">#{{ rec.retrieval_trace.vector_rank }}</span>
+                              </div>
+                              <div class="breakdown-row" v-if="rec.retrieval_trace.llm_rank">
+                                <span class="breakdown-label">LLM Rank</span>
+                                <span class="breakdown-value">#{{ rec.retrieval_trace.llm_rank }}</span>
+                              </div>
+                              <div class="breakdown-row" v-if="rec.retrieval_trace.rrf_score">
+                                <span class="breakdown-label">RRF Score</span>
+                                <span class="breakdown-value">{{ (rec.retrieval_trace.rrf_score * 100).toFixed(0) }}%</span>
+                              </div>
+                            </div>
+                            
+                            <div class="breakdown-footer">
+                              Mode: <strong>{{ rec.score_breakdown.mode?.toUpperCase() }}</strong>
+                              <span v-if="rec.selected_by_mmr" class="mmr-badge">MMR Selected</span>
+                            </div>
+                            </template>
+                          </div>
+                        </transition>
                           
                           <div class="rec-price-row">
                             {{ formatPrice(rec.recommended_product.price) }} ₽
@@ -338,6 +414,9 @@ const showBackToTop = ref(false)
 const recListContainer = ref(null)
 // State to store previous scores
 const previousScores = ref({})
+
+// State to track which recommendation cards have expanded score breakdown
+const expandedScoreCards = ref({})
 
 // --- Filtering ---
 function switchCategory(cat) {
@@ -478,6 +557,9 @@ function openModal(product) {
   
   // Clear previous scores when opening a new main product
   previousScores.value = {}
+  
+  // Clear expanded score cards
+  expandedScoreCards.value = {}
 
   fetchRecommendations(product.id)
 }
@@ -498,6 +580,25 @@ function setFeedback(recommendedProductId, value) {
   } else {
     feedbackMap.value = { ...feedbackMap.value, [recommendedProductId]: value }
   }
+}
+
+// Toggle score breakdown visibility for a recommendation card
+function toggleScoreBreakdown(recId) {
+  expandedScoreCards.value = {
+    ...expandedScoreCards.value,
+    [recId]: !expandedScoreCards.value[recId]
+  }
+}
+
+// Format channel source as readable text
+function formatChannels(channels) {
+  if (!channels || channels.length === 0) return 'Unknown'
+  const labels = {
+    'vector': '🔵 Vector',
+    'llm': '🟣 LLM',
+    'fallback': '⚪ Fallback'
+  }
+  return channels.map(c => labels[c] || c).join(' + ')
 }
 
 async function submitAllFeedback() {
@@ -929,6 +1030,173 @@ onUnmounted(() => {
 
 .text-green { color: #10B981; }
 .text-red { color: #EF4444; }
+
+/* Score Info Container */
+.score-info-container {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Info Toggle Button */
+.info-toggle-btn {
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: #E2E8F0;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: #64748B;
+  transition: all 0.2s;
+  padding: 0;
+}
+.info-toggle-btn:hover {
+  background: #CBD5E1;
+  color: #1E293B;
+}
+.info-toggle-btn.active {
+  background: var(--color-accent);
+  color: white;
+  transform: rotate(180deg);
+}
+
+/* Score Breakdown Panel */
+.score-breakdown-panel {
+  background: linear-gradient(135deg, #F8FAFC 0%, #F1F5F9 100%);
+  border: 1px solid #E2E8F0;
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 12px;
+  font-size: 0.8rem;
+}
+
+.breakdown-title {
+  font-weight: 700;
+  color: #475569;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #E2E8F0;
+}
+
+.breakdown-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.breakdown-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: relative;
+}
+
+.breakdown-label {
+  color: #64748B;
+  font-size: 0.75rem;
+}
+
+.breakdown-value {
+  font-weight: 600;
+  color: #1E293B;
+  font-size: 0.75rem;
+}
+
+.breakdown-value.has-penalty {
+  color: var(--color-error);
+}
+
+.breakdown-value.channels {
+  font-size: 0.7rem;
+}
+
+.breakdown-bar {
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  height: 2px;
+  background: var(--color-accent);
+  border-radius: 1px;
+  opacity: 0.6;
+  max-width: 60%;
+}
+
+.breakdown-bar.ts {
+  background: #10B981;
+}
+
+.breakdown-footer {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #E2E8F0;
+  font-size: 0.7rem;
+  color: #64748B;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.breakdown-footer strong {
+  color: var(--color-primary);
+}
+
+.mmr-badge {
+  background: #DBEAFE;
+  color: #2563EB;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 600;
+}
+
+.channels-row .breakdown-value {
+  font-size: 0.7rem;
+}
+
+.no-data-message {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 16px;
+  color: #64748B;
+  text-align: center;
+}
+.no-data-message span {
+  font-size: 0.85rem;
+  margin-bottom: 4px;
+}
+.no-data-message small {
+  font-size: 0.7rem;
+  color: #94A3B8;
+}
+
+/* Expand transition */
+.expand-enter-active,
+.expand-leave-active {
+  transition: all 0.3s ease;
+  overflow: hidden;
+}
+.expand-enter-from,
+.expand-leave-to {
+  opacity: 0;
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  margin-top: 0;
+}
+.expand-enter-to,
+.expand-leave-from {
+  opacity: 1;
+  max-height: 300px;
+}
 
 .rec-price-row { font-weight: 800; color: var(--text-primary); margin-bottom: 12px; }
 

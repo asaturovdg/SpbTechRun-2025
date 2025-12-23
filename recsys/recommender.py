@@ -627,20 +627,24 @@ class RecommendationEngine:
             price_factor = self._calculate_price_factor(main_price, candidate_price)
             
             # Combine scores with mode-specific weighting
+            feedback_count = self.sampler.get_feedback_count(arm_key)
+            
             if self.demo_mode:
                 # DEMO mode: Fixed weights for visible learning effects
                 base_weight = self.ts_base_weight_demo  # 0.8
                 ts_weight = 1.0 - base_weight  # 0.2
                 combined_score = base_score * base_weight + thompson_weight * ts_weight
+                gamma = None  # Not applicable in DEMO mode
+                mode = "demo"
             else:
                 # Normal mode: Dynamic weights based on feedback count
                 # gamma increases from 0 to 1 as feedback accumulates
-                n = self.sampler.get_feedback_count(arm_key)
                 k = self.ts_weight_halflife  # Feedback count for gamma=0.5
-                gamma = n / (n + k) if (n + k) > 0 else 0.0
+                gamma = feedback_count / (feedback_count + k) if (feedback_count + k) > 0 else 0.0
                 
                 # Cold start: rely on base_score; with feedback: rely on TS
                 combined_score = (1.0 - gamma) * base_score + gamma * thompson_weight
+                mode = "normal"
             
             # Apply price penalty
             final_score = combined_score * price_factor
@@ -648,9 +652,37 @@ class RecommendationEngine:
             # Clip to [0, 1] range
             final_score = max(0.0, min(1.0, final_score))
             
+            # Build retrieval trace
+            channels = []
+            if item.get('_vector_rank') is not None:
+                channels.append("vector")
+            if item.get('_llm_rank') is not None:
+                channels.append("llm")
+            if not channels:
+                channels.append("fallback")
+            
             scored.append({
                 'item': item,
                 'score': round(final_score, 3),
+                # Score breakdown for frontend visualization
+                'score_breakdown': {
+                    'base_score': round(base_score, 3),
+                    'thompson_weight': round(thompson_weight, 3),
+                    'price_factor': round(price_factor, 3),
+                    'mode': mode,
+                    'feedback_count': feedback_count,
+                    'gamma': round(gamma, 3) if gamma is not None else None,
+                },
+                # Retrieval trace for frontend visualization
+                'retrieval_trace': {
+                    'channels': channels,
+                    'vector_rank': item.get('_vector_rank'),
+                    'llm_rank': item.get('_llm_rank'),
+                    'rrf_score': round(item.get('_rrf_score', 0), 3) if item.get('_rrf_score') else None,
+                    'vector_similarity': round(item.get('similarity', 0), 3) if item.get('similarity') else None,
+                    'llm_match_score': round(item.get('llm_match_score', 0), 3) if item.get('llm_match_score') else None,
+                },
+                # Keep legacy fields for backward compatibility
                 'base_score': round(base_score, 3),
                 'thompson_weight': round(thompson_weight, 3),
                 'price_factor': round(price_factor, 3),
@@ -658,7 +690,7 @@ class RecommendationEngine:
         
         return scored
     
-    def _build_response(self, scored_candidates: List[Dict]) -> List[Dict]:
+    def _build_response(self, scored_candidates: List[Dict], include_mmr_info: bool = True) -> List[Dict]:
         result = []
         
         for idx, scored_item in enumerate(scored_candidates):
@@ -680,12 +712,23 @@ class RecommendationEngine:
                 "description": item.get('description', ''),
             }
             
-            # Build recommendation object
+            # Build recommendation object with score breakdown for frontend visualization
             recommendation_obj = {
                 "id": idx + 1000,  # Recommendation record ID
-                "similarity_score": score,
+                "similarity_score": score,  # Legacy field (same as final_score)
+                "final_score": score,
                 "created_at": datetime.now().isoformat(),
-                "recommended_product": rec_product
+                "recommended_product": rec_product,
+                
+                # Score breakdown for "why this score?" visualization
+                "score_breakdown": scored_item.get('score_breakdown', {}),
+                
+                # Retrieval trace for "where did this come from?" visualization
+                "retrieval_trace": scored_item.get('retrieval_trace', {}),
+                
+                # MMR info: position in final list (1-indexed)
+                "rank": idx + 1,
+                "selected_by_mmr": idx >= self.mmr_pure_top_k if include_mmr_info and self.mmr_enabled else False,
             }
             result.append(recommendation_obj)
         

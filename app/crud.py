@@ -47,8 +47,13 @@ async def get_recommendations(
         RecommendationRead(
             id=r["id"],
             similarity_score=r["similarity_score"],
+            final_score=r.get("final_score"),
             created_at=r["created_at"],
+            rank=r.get("rank"),
+            selected_by_mmr=r.get("selected_by_mmr"),
             recommended_product=ProductRead.model_validate(r["recommended_product"]),
+            score_breakdown=r.get("score_breakdown"),
+            retrieval_trace=r.get("retrieval_trace"),
         )
         for r in recommendations
     ]

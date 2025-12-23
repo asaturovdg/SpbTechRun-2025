@@ -61,6 +61,26 @@ class ProductRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ScoreBreakdown(BaseModel):
+    """Score breakdown for visualization"""
+    base_score: Optional[float] = None
+    thompson_weight: Optional[float] = None
+    price_factor: Optional[float] = None
+    mode: Optional[str] = None
+    feedback_count: Optional[int] = None
+    gamma: Optional[float] = None
+
+
+class RetrievalTrace(BaseModel):
+    """Retrieval trace for visualization"""
+    channels: Optional[List[str]] = None
+    vector_rank: Optional[int] = None
+    llm_rank: Optional[int] = None
+    rrf_score: Optional[float] = None
+    vector_similarity: Optional[float] = None
+    llm_match_score: Optional[float] = None
+
+
 class RecommendationRead(BaseModel):
     """
     Одна строка выдачи /recommendations/{product_id}.
@@ -68,9 +88,18 @@ class RecommendationRead(BaseModel):
 
     id: int
     similarity_score: float
+    final_score: Optional[float] = None
     created_at: Optional[str] = None  
+    rank: Optional[int] = None
+    selected_by_mmr: Optional[bool] = None
 
     recommended_product: ProductRead
+    
+    # Score breakdown for frontend visualization
+    score_breakdown: Optional[ScoreBreakdown] = None
+    
+    # Retrieval trace for frontend visualization
+    retrieval_trace: Optional[RetrievalTrace] = None
 
     model_config = {"from_attributes": True}
 
